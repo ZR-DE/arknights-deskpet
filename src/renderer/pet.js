@@ -38,6 +38,8 @@ let hitRect = null;
 let currentAnim = null;
 let headBone = null;
 let currentOutfitId = null;
+/** 她现在是什么状态：idle / relax / sit / sleep，见下方「休息状态机」 */
+let mood = 'idle';
 
 /* ------------------------------------------------------------------ *
  * 动画
@@ -72,6 +74,9 @@ function playOnce(name) {
 /** 窗口顶部留给气泡的高度，角色只在下面这段里排 */
 const BUBBLE_RESERVE = 110;
 
+/** 这套衣服按待机姿态算出来的基准缩放；姿态变化时只在这里的基础上微调 */
+let baseScale = 1;
+
 /** 缩放并摆好位置；返回角色在窗口里的矩形。传入实例，因为换装时新骨架还没上台 */
 function layout(target) {
   target.scale.set(1);
@@ -83,6 +88,7 @@ function layout(target) {
   const availH = HEIGHT - BUBBLE_RESERVE;
   const scale = Math.min((WIDTH * 0.96) / base.width, (availH * 0.96) / base.height);
   target.scale.set(scale);
+  baseScale = scale;
 
   // 水平居中、脚底贴住窗口下沿
   target.x = WIDTH / 2 - (base.x + base.width / 2) * scale;
@@ -129,6 +135,18 @@ async function mountOutfit(url, { silent = false } = {}) {
 
     const next = new PIXI.spine.Spine(spineData);
 
+    // 姿态之间给一点混合。不设的话 站->坐 是一帧硬跳，看着像卡了一下；
+    // 但点击反应要快，单独压短，不然拍上去她半天才动。
+    try {
+      const fast = CHARACTER.anim.interact;
+      next.stateData.defaultMix = 0.2;
+      for (const name of names) {
+        if (name !== fast) next.stateData.setMix(name, fast, 0.06);
+      }
+    } catch {
+      /* 没有 stateData 就没有过渡，不影响能不能用 */
+    }
+
     // 必须先播上动画再量尺寸：初始姿态和待机姿态的包围盒差很多
     next.state.setAnimation(0, pickIdle(names), true);
     next.update(0.016);
@@ -158,7 +176,20 @@ async function mountOutfit(url, { silent = false } = {}) {
     next.state.addListener({
       complete: (entry) => {
         if (!entry || !entry.animation) return;
-        if (entry.animation.name !== CHARACTER.anim.idle) toIdle();
+        if (entry.animation.name === CHARACTER.anim.idle) return;
+        /**
+         * 一次性动作播完，回到"她本来该有的样子"。
+         *
+         * playOnce 已经排了一个 idle，站着的时候不用再切，让排队的那个接管；
+         * 但姿势回到站位后，命中框和头顶剖面还停在动作中的样子，得重测一次。
+         */
+        if (mood !== 'idle') {
+          currentAnim = null;
+          play(mood, true);
+          resettle();
+        } else {
+          resettle(620);
+        }
       },
     });
 
@@ -176,6 +207,13 @@ async function mountOutfit(url, { silent = false } = {}) {
       // 视觉反馈：播一次互动动画，不用说话
       playOnce('interact');
     }
+
+    // 换了身衣服，但她还在刚才那个状态里——坐着换完还是坐着
+    if (mood !== 'idle') {
+      currentAnim = null;
+      play(mood, true);
+      resettle();
+    }
     return true;
   } catch (err) {
     console.error('[spine] 加载失败 ' + url, err);
@@ -191,6 +229,7 @@ function refreshDiag() {
     animations: animationNames,
     headBone: headBone ? headBone.data.name : null,
     outfit: currentOutfitId,
+    mood,
     hitRect: hitRect
       ? {
           x: Math.round(hitRect.x),
@@ -497,7 +536,23 @@ window.__petDebug = {
   // 走完整链路：主进程落设置 -> 推事件 -> 渲染层换骨架。和点托盘菜单是同一条路
   outfit: () => currentOutfitId,
   setOutfit: (id) => window.pet.setOutfit(id),
+  // 状态机：不传参就返回当前状态，传了就强制切（验收用，不等那几分钟）
+  mood: (name) => {
+    if (!name) return mood;
+    enterMood(name);
+    return mood;
+  },
+  /**
+   * 假装她已经被晾了 N 秒，然后重新排程。
+   * 用来验证「闲置多久会自己坐下」这条链路，不用真等一分半。
+   */
+  ago: (seconds) => {
+    lastInteract = Date.now() - seconds * 1000;
+    scheduleMood();
+    return { mood, waited: seconds };
+  },
   state: () => ({
+    mood,
     anchor: bubbleAnchor(),
     head: headBone ? { x: Math.round(headBone.worldX), y: Math.round(headBone.worldY) } : null,
     rect: (() => {
@@ -519,6 +574,8 @@ function onTap() {
   lastInteract = Date.now();
   window.pet.click();
 
+  // 先叫醒再播反应：顺序反了的话，她会在坐着的姿态上做站立动作
+  wake();
   playOnce('interact');
   speakWithVoice(L.click);
 }
@@ -526,10 +583,12 @@ function onTap() {
 document.addEventListener('pointerdown', (e) => {
   if (e.button !== 0 || !pointInPet(e.clientX, e.clientY)) return;
 
+  lastInteract = Date.now();
   pointerActive = true;
   dragStarted = false;
   downX = e.screenX;
   downY = e.screenY;
+  wake();
   window.pet.dragBegin(e.screenX, e.screenY);
   e.preventDefault();
 });
@@ -591,20 +650,163 @@ async function startGreeting() {
 }
 
 /* ------------------------------------------------------------------ *
- * 闲置
+ * 休息状态机
+ *
+ * 她不是一直站着等你的。待久了会松下来（relax），再久一点会坐下（sit），
+ * 深夜坐到后面就睡着了（sleep）。任何一次点击、拖动都会把她叫回 idle。
+ *
+ * 为什么用「距上次互动多久」而不是随机：
+ * 随机切姿态一眼就能看出是程序在动，时间驱动的过渡才像"她自己待累了"。
+ * 阈值也别太密——刚放下手她就坐下，会显得很急。
  * ------------------------------------------------------------------ */
+
 function isLateNight() {
   const hour = new Date().getHours();
   return hour >= 23 || hour < 5;
 }
 
+/** 安静多久之后进入下一档。sleep 只在她本来就该睡的时候出现 */
+const REST_STAGES = [
+  { mood: 'relax', after: 90e3 },
+  { mood: 'sit', after: 240e3 },
+  { mood: 'sleep', after: 600e3, nightOnly: true },
+];
+
+let moodTimer = null;
+let poseTimer = null;
+
+function restStageAfter(current) {
+  const idx = REST_STAGES.findIndex((s) => s.mood === current);
+  const next = idx === -1 ? REST_STAGES[0] : REST_STAGES[idx + 1];
+  if (!next) return null;
+  // 白天的最后一档就是 sit：坐在那儿陪着你，不再往下掉
+  if (next.nightOnly && !isLateNight()) return null;
+  return next;
+}
+
+function scheduleMood() {
+  clearTimeout(moodTimer);
+  const stage = restStageAfter(mood);
+
+  if (!stage) {
+    // 白天坐到 sit 就到头了。但夜里还有 sleep 一档，过十分钟再看一眼，
+    // 免得她从下午一直坐到半夜都不睡。
+    moodTimer = setTimeout(scheduleMood, 10 * 60e3);
+    return;
+  }
+
+  const quiet = Date.now() - lastInteract;
+  moodTimer = setTimeout(
+    () => {
+      // 定时器到点不等于真的闲了：中途可能被点过，重新排
+      if (Date.now() - lastInteract < stage.after) {
+        scheduleMood();
+        return;
+      }
+      enterMood(stage.mood);
+    },
+    Math.max(1500, stage.after - quiet)
+  );
+}
+
+function enterMood(next) {
+  if (mood === next) return;
+
+  if (!spine) {
+    // 骨架还没上台（或加载失败）。过一会儿再试，别让状态机就此停摆
+    moodTimer = setTimeout(scheduleMood, 30e3);
+    return;
+  }
+
+  mood = next;
+  currentAnim = null;
+  play(next, true);
+  resettle();
+  scheduleMood();
+  refreshDiag();
+}
+
+/** 叫醒：任何互动都先走这里，把她叫回来并重新开始计时 */
+function wake() {
+  const wasResting = mood !== 'idle';
+  mood = 'idle';
+  if (wasResting && spine) {
+    currentAnim = null;
+    play('idle', true);
+    resettle();
+    refreshDiag();
+  }
+  scheduleMood();
+}
+
+/**
+ * 姿态变了就重测一次「她现在多高、占多大地方」。
+ *
+ * 坐着比站着矮一大截。不重测的话：气泡会飘在原来头顶的高度，
+ * 而她腿原来所在的位置还会继续吃掉鼠标，点旁边的桌面点不动。
+ * 延迟是因为混合过渡要几百毫秒才到位，早测了量到的是半蹲的中间态。
+ */
+function resettle(delay = 560) {
+  clearTimeout(poseTimer);
+  poseTimer = setTimeout(() => {
+    requestAnimationFrame(() => {
+      if (!spine) return;
+
+      /**
+       * 先回到这套衣服本来的大小，再按当前姿态决定要不要缩。
+       * Sleep 是躺着的，比站着宽一倍，窗口装不下——不缩的话头尾都在框外。
+       * 只缩不放：坐下比站着矮是正常的，不该因为她矮就放大。
+       */
+      spine.scale.set(baseScale);
+
+      const raw = spine.getBounds();
+      if (!raw.width || !raw.height) return;
+
+      const fit = Math.min(
+        (WIDTH * 0.98) / raw.width,
+        ((HEIGHT - BUBBLE_RESERVE) * 0.98) / raw.height,
+        1
+      );
+      if (fit < 0.999) spine.scale.set(baseScale * fit);
+
+      /**
+       * 坐下、躺下这些动作在骨架里自带整体位移，包围盒会整个往下掉，
+       * 照原样待着腿就出框了（实测掉出去一百多像素，只剩上半身）。
+       * 所以按当前姿态把底边重新压回窗口下沿。
+       *
+       * 注意是双向修正：只往上推的话，站起来时她还悬在半空回不去。
+       */
+      const box = spine.getBounds();
+      const overflow = box.y + box.height - (HEIGHT - 2);
+      if (Math.abs(overflow) > 0.5) spine.y -= overflow;
+
+      topProfile = null;
+      measureTopProfile(spine);
+
+      const b = spine.getBounds();
+      if (b.width > 1 && b.height > 1) {
+        hitRect = { x: b.x, y: b.y, w: b.width, h: b.height };
+      }
+
+      if (bubbleVisible) placeBubble(true);
+      refreshDiag();
+    });
+  }, delay);
+}
+
+/**
+ * 偶尔说一句话。
+ *
+ * 只说话，不碰动画——姿态归状态机管。
+ * 睡着了就别吵她；气泡还开着的时候也别叠话。
+ */
 function scheduleIdle() {
   const wait = 45000 + Math.random() * 70000;
   setTimeout(() => {
     const quiet = Date.now() - lastInteract;
-    if (!document.hidden && quiet > 40000 && !bubbleVisible) {
-      say(window.PET_PICK(isLateNight() ? L.lateNight : L.idle), 6000);
-      if (isLateNight()) play('sleep', true);
+    if (!document.hidden && quiet > 40000 && !bubbleVisible && mood !== 'sleep') {
+      const list = mood === 'sit' ? L.rest : isLateNight() ? L.lateNight : L.idle;
+      say(window.PET_PICK(list), 6000);
     }
     scheduleIdle();
   }, wait);
@@ -646,6 +848,7 @@ function scheduleIdle() {
   if (ok) {
     startGreeting();
     scheduleIdle();
+    scheduleMood();
   } else {
     setTimeout(() => say('……我好像，站不起来了。', 9000), 600);
   }

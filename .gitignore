@@ -62,3 +62,6 @@ desktop.ini
 
 # 时装批量验收截图
 /outfit-*.png
+
+# 姿态验收截图
+/mood-*.png

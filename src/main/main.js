@@ -396,7 +396,7 @@ function createWindow() {
               rect: d.hitRect,
               anchor: d.headAnchor,
               profile: d.topProfile,
-              anim: (d.animations || []).length,
+              anims: d.animations || [],
               bubble: b ? b.classList.contains('show') : null,
             };
           })()`);
@@ -415,6 +415,102 @@ function createWindow() {
       }
 
       console.log('[sweep] done');
+      app.exit(0);
+    }, 3200);
+  }
+
+  /**
+   * 姿态验收：强制切 relax / sit，看姿态对不对、气泡有没有压到头、
+   * 命中框有没有跟着缩回去。状态机正常要等一分半才自己动，验收等不起。
+   */
+  if (process.env.PET_MOOD_PROBE === '1') {
+    setTimeout(async () => {
+      const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+      // 最后回到 idle：验证从坐姿站起来能回到原来的位置，
+      // 而不是被"贴底修正"一路推上去回不来
+      for (const m of ['relax', 'sit', 'sleep', 'idle']) {
+        try {
+          await win.webContents.executeJavaScript(`window.__petDebug.mood('${m}')`);
+        } catch (err) {
+          console.error('[mood] 切换失败 ' + m, err);
+        }
+        await wait(1200);
+
+        // 先说一句：坐着也要能正常说话，气泡要跟着新的头顶高度重新贴上去。
+        // 先 say 后读 diag，读到的才是气泡的真实位置，不是隐藏状态的旧值
+        try {
+          await win.webContents.executeJavaScript(`window.__petDebug.say('坐一会儿。')`);
+          await wait(600);
+        } catch {
+          /* 说话失败不影响截图 */
+        }
+
+        let diag = null;
+        try {
+          diag = await win.webContents.executeJavaScript(`(() => {
+            const d = window.__diag || {};
+            const b = document.getElementById('bubble');
+            return {
+              mood: d.mood,
+              rect: d.hitRect,
+              anchor: d.headAnchor,
+              profile: d.topProfile,
+              bubbleTop: b && b.classList.contains('show') ? Math.round(b.getBoundingClientRect().top) : null,
+            };
+          })()`);
+        } catch (err) {
+          diag = { error: String((err && err.message) || err) };
+        }
+
+        try {
+          const img = await win.webContents.capturePage();
+          fs.writeFileSync(path.join(process.cwd(), `mood-${m}.png`), img.toPNG());
+        } catch (err) {
+          console.error('[mood] 截图失败 ' + m, err);
+        }
+
+        console.log('[mood] ' + JSON.stringify({ id: m, ...diag }));
+      }
+
+      console.log('[mood] done');
+      app.exit(0);
+    }, 3200);
+  }
+
+  /**
+   * 状态机流转验收。
+   *
+   * 不靠肉眼等一分半：把"上次互动时间"往前推，让真实的定时器自己到点。
+   * 走的是和生产完全一样的链路，只是时间戳被改了。
+   */
+  if (process.env.PET_FLOW_PROBE === '1') {
+    setTimeout(async () => {
+      const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+      const run = (js) => win.webContents.executeJavaScript(js);
+
+      const step = async (label, seconds) => {
+        await run(`window.__petDebug.ago(${seconds})`);
+        await wait(2600); // 等姿态混合 + 贴底修正跑完
+        const s = await run(
+          `({ mood: window.__diag.mood, rect: window.__diag.hitRect, bubble: document.getElementById('bubble').classList.contains('show') })`
+        );
+        console.log('[flow] ' + JSON.stringify({ label, ...s }));
+      };
+
+      await step('闲置 95s', 95);
+      await step('闲置 250s', 250);
+      await step('闲置 620s（非深夜，应停在 sit）', 620);
+
+      // 点一下，看她能不能从坐姿站起来
+      win.webContents.sendInputEvent({ type: 'mouseDown', x: 192, y: 430, button: 'left', clickCount: 1 });
+      win.webContents.sendInputEvent({ type: 'mouseUp', x: 192, y: 430, button: 'left', clickCount: 1 });
+      await wait(3400);
+      const after = await run(
+        `({ mood: window.__diag.mood, rect: window.__diag.hitRect, bubble: document.getElementById('bubble').classList.contains('show') })`
+      );
+      console.log('[flow] ' + JSON.stringify({ label: '点击之后', ...after }));
+
       app.exit(0);
     }, 3200);
   }
