@@ -24,7 +24,15 @@
 装好依赖之后，`node_modules/electron/dist/electron.exe` 本身就是完整的运行环境，
 **不需要系统里安装 Node.js**。
 
-双击项目里的 `启动桌宠.vbs` 即可。它会自动找到程序目录，不弹命令行窗口。
+双击项目里的 **`启动桌宠.cmd`** 即可，命令窗口会一闪而过，然后她出现在屏幕右下角。
+
+> 为什么是 `.cmd` 而不是 `.vbs`：`.vbs` 依赖 Windows Script Host，
+> 部分系统的安全策略或安全软件会直接禁用，双击没有任何反应。
+> `.cmd` 是所有 Windows 都能执行的，代价是会闪一下黑窗。
+>
+> 这两个脚本刻意写成**纯 ASCII + CRLF 换行**：cmd 按系统码页（中文系统是 936）
+> 逐字节解析批处理文件，一旦文件是 UTF-8 却带了 `chcp 65001`，
+> 中文字符的第二个字节会被当成命令的一部分，整行拆散报错。
 
 ### 方式二：命令行
 
@@ -66,7 +74,7 @@ src/renderer/vendor/       pixi 与 pixi-spine 的预构建文件
 assets/                    素材（character 与 audio 永不入库）
 scripts/start.js           命令行启动器
 scripts/make-tray-icon.js  零依赖生成托盘 PNG
-启动桌宠.vbs               双击启动（不依赖 Node）
+启动桌宠.cmd               双击启动（不依赖 Node）
 调试启动.cmd               双击调试（带日志窗口）
 ```
 

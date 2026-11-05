@@ -1,16 +1,19 @@
 @echo off
-chcp 65001 >nul
-title 桌宠 - 调试模式
 cd /d "%~dp0"
-
-rem 清掉可能被继承的环境变量，否则 Electron 会退化成纯 Node
-set ELECTRON_RUN_AS_NODE=
-
-echo 正在启动桌宠（调试模式，日志显示在本窗口）...
+set "ELECTRON_RUN_AS_NODE="
+echo ==========================================
+echo  deskpet - DEBUG MODE
+echo  Logs are printed in this window.
+echo  Close this window to stop the pet.
+echo ==========================================
 echo.
-
-"%~dp0node_modules\electron\dist\electron.exe" "%~dp0." --dev
-
+if not exist "node_modules\electron\dist\electron.exe" (
+  echo [ERROR] electron.exe not found.
+  echo Run "npm install" in this folder first.
+  pause
+  exit /b 1
+)
+"node_modules\electron\dist\electron.exe" "%~dp0." --dev
 echo.
-echo 桌宠已退出，退出码 %ERRORLEVEL%
+echo [deskpet exited, code %ERRORLEVEL%]
 pause
