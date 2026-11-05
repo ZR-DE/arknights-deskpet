@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self' pet: file: blob: data:; img-src 'self' pet: data: blob:; connect-src 'self' pet: file: data: blob:; media-src 'self' pet: file: blob: data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-eval'"
+    />
+    <title>语音标注</title>
+    <link rel="stylesheet" href="audio-label.css" />
+  </head>
+  <body>
+    <header>
+      <div class="head-left">
+        <h1>语音标注</h1>
+        <span id="src" class="muted">加载中…</span>
+      </div>
+      <div class="head-right">
+        <span id="progress" class="muted">—</span>
+        <button id="save" class="primary">保存</button>
+      </div>
+    </header>
+
+    <div id="hint" class="hint">
+      空格 播放/暂停 · ↑↓ 选上一段·下一段 · Enter 跳到字幕框 · Ctrl+S 保存 ·
+      字幕框里 Enter 播下一段
+    </div>
+
+    <main id="list" class="list"></main>
+
+    <footer>
+      <div id="status" class="status">…</div>
+      <div class="legend muted">
+        重叠高亮 = 还没写字幕。留空表示这句不要。
+      </div>
+    </footer>
+
+    <script src="audio-label.js"></script>
+  </body>
+</html>

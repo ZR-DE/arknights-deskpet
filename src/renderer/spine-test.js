@@ -13,7 +13,7 @@
 const WIDTH = window.innerWidth || 380;
 const HEIGHT = window.innerHeight || 520;
 
-const SKELETON = 'pet://character/build_char_4228_closur.skel';
+const SKELETON = window.PET_CHARACTER.skeleton;
 
 window.__diag = {
   stage: 'boot',

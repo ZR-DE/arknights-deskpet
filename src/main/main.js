@@ -17,9 +17,29 @@ const fs = require('node:fs');
 const memory = require('./memory');
 
 const ASSETS_ROOT = path.join(__dirname, '..', '..', 'assets');
+const AUDIO_DIR = path.join(ASSETS_ROOT, 'audio');
+
+/**
+ * 语音文件名的唯一来源。
+ *
+ * 渲染层不再自己拼路径，启动时通过 IPC 取——之前角色路径写了两份，
+ * 换素材时改漏一处，调试页和桌面看到的不是同一个人。
+ */
+const VOICE = {
+  pack: 'amiya.ogg',
+  segments: 'amiya.segments.json',
+  lines: 'amiya.lines.json',
+};
+
+function audioPath(name) {
+  return path.join(AUDIO_DIR, name);
+}
 
 /** 调试模式：带 --dev 启动时打开 DevTools */
 const DEV_MODE = process.argv.includes('--dev');
+
+/** 语音标注工具模式：单独开一个正常窗口，不创建桌宠 */
+const LABEL_MODE = process.env.PET_VOICE_LABEL === '1';
 
 const MIME = {
   '.png': 'image/png',
@@ -54,7 +74,9 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 const WIN_WIDTH = 380;
-const WIN_HEIGHT = 520;
+// 高度里有一段是留给头顶气泡的：角色本身只占下半部分（见 pet.js 的 BUBBLE_RESERVE）。
+// 不留这段的话，人和气泡塞在一个窗口里，气泡会被顶到耳朵上。
+const WIN_HEIGHT = 620;
 const EDGE_MARGIN = 16;
 
 let win = null;
@@ -62,6 +84,8 @@ let tray = null;
 let ignoringMouse = true;
 let dragOrigin = null;
 let companion = null;
+let labelWin = null;
+let muted = false;
 
 if (!app.requestSingleInstanceLock()) {
   app.quit();
@@ -88,6 +112,17 @@ function applyIgnore(next) {
   } else {
     win.setIgnoreMouseEvents(false);
   }
+}
+
+/**
+ * 渲染进程日志转发。
+ * 新版 Electron 只传一个事件对象，而且会按参数个数判断是不是旧写法——
+ * 只要声明了 (event, level, message)，就会一直刷 deprecation。所以只收一个参数。
+ */
+function forwardConsole(tag) {
+  return (event) => {
+    console.log(`[${tag}] ${(event && event.message) || ''}`);
+  };
 }
 
 function createWindow() {
@@ -145,9 +180,7 @@ function createWindow() {
     return { action: 'deny' };
   });
 
-  win.webContents.on('console-message', (_e, level, message) => {
-    console.log(`[renderer:${level}] ${message}`);
-  });
+  win.webContents.on('console-message', forwardConsole('renderer'));
 
   win.webContents.on('did-fail-load', (_e, code, desc) => {
     console.error('[load-fail]', code, desc);
@@ -176,15 +209,37 @@ function createWindow() {
         }
       }
 
+      // 语音探针：发一次真实的鼠标点击（算用户手势，否则 AudioContext 不肯出声），
+      // 再看气泡里显示的字和播放状态对不对
+      if (process.env.PET_VOICE_PROBE === '1') {
+        try {
+          const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+          await win.webContents.executeJavaScript(`window.__petDebug.say('')`);
+          win.webContents.sendInputEvent({ type: 'mouseDown', x: 192, y: 380, button: 'left', clickCount: 1 });
+          win.webContents.sendInputEvent({ type: 'mouseUp', x: 192, y: 380, button: 'left', clickCount: 1 });
+          await wait(800);
+          const probe = await win.webContents.executeJavaScript(`(() => ({
+            voice: window.__petDebug.voice(),
+            bubble: document.getElementById('bubble-text').textContent,
+            shown: document.getElementById('bubble').classList.contains('show'),
+          }))()`);
+          console.log('[voiceprobe]', JSON.stringify(probe));
+        } catch (err) {
+          console.error('[voiceprobe] failed', err);
+        }
+      }
+
       try {
         const diag = await win.webContents.executeJavaScript(`(() => {
           const el = document.getElementById('bubble');
-          const r = el.getBoundingClientRect();
-          const extra = {
-            bubbleShown: el.classList.contains('show'),
-            bubbleText: document.getElementById('bubble-text').textContent.slice(0, 24),
-            bubbleRect: [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)],
-          };
+          const extra = {};
+          if (el) {
+            const r = el.getBoundingClientRect();
+            const t = document.getElementById('bubble-text');
+            extra.bubbleShown = el.classList.contains('show');
+            extra.bubbleText = t ? t.textContent.slice(0, 24) : '';
+            extra.bubbleRect = [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)];
+          }
           return Object.assign({}, window.__diag || {}, extra);
         })()`);
         console.log('[diag]', JSON.stringify(diag));
@@ -227,6 +282,84 @@ function createWindow() {
   }
 }
 
+/**
+ * 语音标注窗口。
+ *
+ * 和桌宠窗口完全两套东西：有标题栏、可缩放、不透明、不进托盘。
+ * 它的唯一用途是让人边听边把每段语音的字幕打上去。
+ */
+function createLabelWindow() {
+  labelWin = new BrowserWindow({
+    width: 940,
+    height: 760,
+    minWidth: 720,
+    minHeight: 480,
+    title: '语音标注',
+    backgroundColor: '#12161b',
+    show: false,
+    webPreferences: {
+      preload: path.join(__dirname, '..', 'preload', 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+    },
+  });
+
+  labelWin.loadFile(path.join(__dirname, '..', 'renderer', 'audio-label.html'));
+
+  labelWin.once('ready-to-show', () => labelWin.show());
+  labelWin.on('closed', () => {
+    labelWin = null;
+  });
+
+  labelWin.webContents.on('console-message', forwardConsole('label'));
+
+  // 自动化验收：检查分段是否载入、音频是否解码成功，并截一张图
+  if (process.env.PET_SMOKE === '1') {
+    setTimeout(async () => {
+      try {
+        const info = await labelWin.webContents.executeJavaScript(`(() => ({
+          status: document.getElementById('status').textContent,
+          progress: document.getElementById('progress').textContent,
+          rows: document.querySelectorAll('.row').length,
+          first: (document.querySelector('.row .time') || {}).textContent || null,
+          diag: window.__labelDiag || null,
+        }))()`);
+        console.log('[label]', JSON.stringify(info));
+      } catch (err) {
+        console.error('[label] diag failed', err);
+      }
+
+      // 走一遍真实交互：往输入框里塞字、点保存，再看文件有没有落下来。
+      // 只测 DOM 事件通不通不算数，要测最后那个 JSON。
+      try {
+        const round = await labelWin.webContents.executeJavaScript(`(async () => {
+          const inputs = [...document.querySelectorAll('.row .text')];
+          for (let i = 0; i < 2 && i < inputs.length; i++) {
+            inputs[i].value = 'TEST_' + i;
+            inputs[i].dispatchEvent(new Event('input', { bubbles: true }));
+          }
+          document.getElementById('save').click();
+          await new Promise((r) => setTimeout(r, 600));
+          return document.getElementById('status').textContent;
+        })()`);
+        const saved = readJsonSafe(audioPath(VOICE.lines));
+        console.log('[label] save ->', round, '| file lines:', saved ? saved.lines.length : null);
+      } catch (err) {
+        console.error('[label] save test failed', err);
+      }
+      try {
+        const img = await labelWin.webContents.capturePage();
+        fs.writeFileSync(path.join(process.cwd(), 'label-shot.png'), img.toPNG());
+        console.log('[label] captured');
+      } catch (err) {
+        console.error('[label] capture failed', err);
+      }
+      app.exit(0);
+    }, 5000);
+  }
+}
+
 function createTray() {
   const iconPath = path.join(__dirname, '..', '..', 'assets', 'brand', 'tray.png');
   if (!fs.existsSync(iconPath)) {
@@ -258,6 +391,15 @@ function createTray() {
         checked: win ? win.isAlwaysOnTop() : true,
         click: (item) => {
           if (win) win.setAlwaysOnTop(item.checked, 'screen-saver');
+        },
+      },
+      {
+        label: '静音（只显示文字）',
+        type: 'checkbox',
+        checked: muted,
+        click: (item) => {
+          muted = item.checked;
+          if (win && !win.isDestroyed()) win.webContents.send('pet:muted', muted);
         },
       },
       { type: 'separator' },
@@ -321,6 +463,68 @@ ipcMain.on('pet:click', () => {
 
 ipcMain.handle('pet:companion', () => companion);
 
+/* ------------------------------------------------------------------ *
+ * 语音
+ * ------------------------------------------------------------------ */
+
+function readJsonSafe(file) {
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+ipcMain.handle('pet:voice-info', () => {
+  const hasPack = fs.existsSync(audioPath(VOICE.pack));
+  const hasLines = fs.existsSync(audioPath(VOICE.lines));
+  return {
+    // 路径由主进程给，渲染层不自己拼——文件名只在这一处定义
+    packUrl: hasPack ? `pet://audio/${VOICE.pack}` : null,
+    linesUrl: hasLines ? `pet://audio/${VOICE.lines}` : null,
+    label: hasPack ? VOICE.pack : null,
+  };
+});
+
+ipcMain.handle('pet:is-muted', () => muted);
+
+ipcMain.handle('voice:load', () => {
+  const segFile = audioPath(VOICE.segments);
+  const lineFile = audioPath(VOICE.lines);
+  const seg = readJsonSafe(segFile);
+  const lines = readJsonSafe(lineFile);
+  return {
+    segments: seg && Array.isArray(seg.segments) ? seg.segments : null,
+    duration: seg ? seg.duration : null,
+    lines: lines && Array.isArray(lines.lines) ? lines.lines : null,
+    paths: { segments: segFile, lines: lineFile },
+  };
+});
+
+ipcMain.handle('voice:save', (_event, payload) => {
+  try {
+    if (!payload || !Array.isArray(payload.lines)) throw new Error('格式不对');
+    // 只留运行时真正要用的字段，顺手把空字幕滤掉
+    const clean = payload.lines
+      .filter((l) => l && Number.isFinite(l.start) && Number.isFinite(l.dur))
+      .map((l) => ({
+        start: Math.round(l.start * 1000) / 1000,
+        dur: Math.round(l.dur * 1000) / 1000,
+        text: String(l.text || '').trim(),
+      }));
+
+    const out = {
+      pack: VOICE.pack,
+      updatedAt: new Date().toISOString(),
+      lines: clean,
+    };
+    fs.writeFileSync(audioPath(VOICE.lines), JSON.stringify(out, null, 2), 'utf8');
+    return { ok: true, saved: clean.length, path: audioPath(VOICE.lines) };
+  } catch (err) {
+    return { ok: false, error: String((err && err.message) || err) };
+  }
+});
+
 function registerAssetProtocol() {
   protocol.handle('pet', async (request) => {
     try {
@@ -343,6 +547,13 @@ function registerAssetProtocol() {
 
 app.on('ready', () => {
   registerAssetProtocol();
+
+  // 标注工具不创建桌宠：它是一把临时用的尺子，用完就关
+  if (LABEL_MODE) {
+    createLabelWindow();
+    return;
+  }
+
   companion = memory.touch();
   createWindow();
   createTray();

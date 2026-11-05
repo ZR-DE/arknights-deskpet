@@ -3,21 +3,10 @@
 /**
  * 主渲染层：pixi + pixi-spine。
  *
- * 想换角色只改下面这块配置——加载逻辑跟具体是谁无关。
- * 动画名按素材实际内容填，缺失的会退回 idle，不会崩。
+ * 想换角色只改 character.js——加载逻辑跟具体是谁无关。
  */
 
-const CHARACTER = {
-  skeleton: 'pet://character/build_char_4228_closur.skel',
-  anim: {
-    idle: 'Default',
-    interact: 'Interact',
-    move: 'Move',
-    relax: 'Relax',
-    sit: 'Sit',
-    sleep: 'Sleep',
-  },
-};
+const CHARACTER = window.PET_CHARACTER;
 
 const WIDTH = window.innerWidth;
 const HEIGHT = window.innerHeight;
@@ -79,6 +68,9 @@ function playOnce(name) {
 /* ------------------------------------------------------------------ *
  * 加载与定位
  * ------------------------------------------------------------------ */
+/** 窗口顶部留给气泡的高度，角色只在下面这段里排 */
+const BUBBLE_RESERVE = 110;
+
 function layout() {
   spine.scale.set(1);
   spine.update(0.016);
@@ -86,7 +78,8 @@ function layout() {
   const base = spine.getLocalBounds();
   if (!base.width || !base.height) return null;
 
-  const scale = Math.min((WIDTH * 0.96) / base.width, (HEIGHT * 0.96) / base.height);
+  const availH = HEIGHT - BUBBLE_RESERVE;
+  const scale = Math.min((WIDTH * 0.96) / base.width, (availH * 0.96) / base.height);
   spine.scale.set(scale);
 
   // 水平居中、脚底贴住窗口下沿
@@ -125,7 +118,6 @@ function layout() {
       stage: 'ready',
       animations: animationNames,
       headBone: headBone ? headBone.data.name : null,
-      headTopOffset,
       hitRect: hitRect
         ? {
             x: Math.round(hitRect.x),
@@ -136,13 +128,13 @@ function layout() {
         : null,
     };
 
-    // 等 pixi 真正画出一帧再量头顶，否则画布还是空的
+    // 等 pixi 真正画出一帧再量，否则画布还是空的
     requestAnimationFrame(() =>
       requestAnimationFrame(() => {
-        measureHeadTop();
-        window.__diag.headTopOffset = headTopOffset;
+        measureTopProfile();
         const a = bubbleAnchor();
         window.__diag.headAnchor = { x: Math.round(a.x), y: Math.round(a.y) };
+        window.__diag.topProfile = topProfile ? topProfile.topY.length : 0;
       })
     );
 
@@ -155,11 +147,35 @@ function layout() {
 
     startGreeting();
     scheduleIdle();
+    startVoice();
   } catch (err) {
     console.error('[spine] 加载失败', err);
     setTimeout(() => say('……我好像，站不起来了。', 9000), 600);
+    startVoice();
   }
 })();
+
+/**
+ * 语音不阻塞启动：角色先站上去，几十兆的解码丢到后台慢慢做。
+ * 解不出来也不影响任何功能，只是点她不出声。
+ */
+async function startVoice() {
+  try {
+    const state = await window.PET_VOICE.init();
+    if (window.__diag) {
+      window.__diag.voice = state.ready
+        ? { lines: window.PET_VOICE.count }
+        : { off: window.PET_VOICE.reason };
+    }
+  } catch (err) {
+    console.error('[voice] init failed', err);
+    return;
+  }
+
+  const muted = await window.pet.isMuted().catch(() => false);
+  window.PET_VOICE.setMuted(muted);
+  window.pet.onMuteChanged((value) => window.PET_VOICE.setMuted(value));
+}
 
 /* ------------------------------------------------------------------ *
  * 命中检测：只在角色矩形内吃掉鼠标
@@ -218,17 +234,20 @@ function findHeadBone(instance) {
 const HEAD_MARGIN = 7;
 
 /**
- * 头骨锚点 -> 可见头顶的距离。
+ * 每列的最高不透明像素（舞台坐标）。
  *
- * 为什么不能直接用一个比例：这份骨架的头骨 F_Head_I 落在眼睛高度，
- * 离可见头顶差了 120px（角色越高差得越多），换角色就完全不准。
- * 所以启动后直接扫一遍渲染结果里最上面那个不透明像素，
- * 用「头顶 - 头骨」的实测差值当固定偏移。之后头怎么浮动，气泡都跟着。
+ * 为什么不能直接用一个比例，也不能只扫头骨左右一条窄带：
+ * - 头骨落在眼睛高度，离可见头顶差 150px，换角色就完全不准
+ * - 只扫窄带会漏掉宽的东西——阿米娅的兔耳在头骨两侧很远，
+ *   窄带里只有头发，气泡就压到耳朵上了
+ *
+ * 所以扫出整张图的「每列最高点」剖面，再按气泡实际覆盖的宽度取最小值：
+ * 气泡有多宽，就查它自己会盖住的那一段，永远压不到人。
  */
-let headTopOffset = null;
+let topProfile = null;
 
-function measureHeadTop() {
-  if (!headBone || !spine) return;
+function measureTopProfile() {
+  if (!spine) return;
 
   // 不能直接从 app.view 读像素：WebGL 绘图缓冲在合成后就被清了，
   // drawImage 拿到的是全透明。extract 会把目标单独渲染进一张纹理，绕开这个问题。
@@ -256,71 +275,93 @@ function measureHeadTop() {
   const kx = bounds.width / tw;
   const ky = bounds.height / th;
 
-  const head = spine.toGlobal(new PIXI.Point(headBone.worldX, headBone.worldY));
-  const cx = (head.x - bounds.x) / kx;
-
-  // 只在头骨左右一条竖带里找，避开左边漂浮的笔记本
-  const band = 38 / kx;
-  const x0 = Math.max(0, Math.round(cx - band));
-  const x1 = Math.min(tw, Math.round(cx + band));
-
-  let firstRow = -1;
-  for (let y = 0; y < th && firstRow < 0; y++) {
-    for (let x = x0; x < x1; x++) {
+  const topY = new Float32Array(tw).fill(Infinity);
+  for (let x = 0; x < tw; x++) {
+    for (let y = 0; y < th; y++) {
       if (px[(y * tw + x) * 4 + 3] > 40) {
-        firstRow = y;
+        topY[x] = bounds.y + y * ky;
         break;
       }
     }
   }
 
-  if (firstRow >= 0) {
-    const topY = bounds.y + firstRow * ky;
-    headTopOffset = topY - head.y - HEAD_MARGIN;
-  }
+  topProfile = { topY, kx, originX: bounds.x, fallbackY: bounds.y };
+}
+
+/** 舞台横坐标区间 [x0, x1] 内最高的不透明像素；没有内容返回 null */
+function topOfRange(x0, x1) {
+  if (!topProfile) return null;
+  const { topY, kx, originX } = topProfile;
+  const c0 = Math.max(0, Math.floor((x0 - originX) / kx));
+  const c1 = Math.min(topY.length - 1, Math.ceil((x1 - originX) / kx));
+  let best = Infinity;
+  for (let c = c0; c <= c1; c++) if (topY[c] < best) best = topY[c];
+  // 这一段全是空的（比如气泡比人还宽），退回整张图的最高点
+  if (best === Infinity) best = topProfile.fallbackY;
+  return best;
 }
 
 function bubbleAnchor() {
-  if (headBone && spine) {
-    const p = spine.toGlobal(new PIXI.Point(headBone.worldX, headBone.worldY));
-    // 还没量到头顶就先用一个保守估算，量到后自动替换
-    const lift = headTopOffset === null ? 34 : headTopOffset;
-    return { x: p.x, y: p.y + lift };
-  }
-  // 没有头骨就退回角色包围盒顶部中点，总比锚在窗口上强
-  if (hitRect) return { x: hitRect.x + hitRect.w / 2, y: hitRect.y };
-  return { x: WIDTH / 2, y: 70 };
+  // 只给调试钩子和无头骨兜底用，正式定位走 placeBubble
+  const ax = headAnchorX();
+  const top = topOfRange(ax - 60, ax + 60);
+  if (top !== null) return { x: ax, y: top - HEAD_MARGIN };
+  if (hitRect) return { x: ax, y: hitRect.y };
+  return { x: ax, y: 70 };
 }
 
 let bubbleVisible = false;
 let smoothX = null;
 let smoothY = null;
 
-function placeBubble(snap = false) {
-  const a = bubbleAnchor();
-  if (snap || smoothX === null) {
-    smoothX = a.x;
-    smoothY = a.y;
-  } else {
-    // 平滑跟随：点头、换动作时头部位置会突变，直接贴过去会让气泡跳
-    smoothX += (a.x - smoothX) * 0.3;
-    smoothY += (a.y - smoothY) * 0.3;
+/** 她头顶正中的横坐标；没有头骨就退回角色包围盒中点 */
+function headAnchorX() {
+  if (headBone && spine) {
+    return spine.toGlobal(new PIXI.Point(headBone.worldX, headBone.worldY)).x;
   }
+  if (hitRect) return hitRect.x + hitRect.w / 2;
+  return WIDTH / 2;
+}
+
+function placeBubble(snap = false) {
+  const ax = headAnchorX();
 
   const w = bubbleEl.offsetWidth;
   const h = bubbleEl.offsetHeight;
   const half = w / 2;
 
   // 水平方向别让气泡跑出窗口
-  const x = Math.min(Math.max(smoothX, half + 6), WIDTH - half - 6);
+  const x = Math.min(Math.max(ax, half + 6), Math.max(WIDTH - half - 6, half + 6));
+
+  // 气泡会盖住的那一段里最高的是什么，就贴在它上面
+  const top = topOfRange(x - half, x + half);
+  let targetY;
+  if (top !== null) {
+    targetY = top - HEAD_MARGIN;
+  } else if (headBone && spine) {
+    const p = spine.toGlobal(new PIXI.Point(headBone.worldX, headBone.worldY));
+    targetY = p.y - 34;
+  } else {
+    targetY = 70;
+  }
+
+  if (snap || smoothX === null) {
+    smoothX = x;
+    smoothY = targetY;
+  } else {
+    // 平滑跟随：点头、换动作时头部位置会突变，直接贴过去会让气泡跳
+    smoothX += (x - smoothX) * 0.3;
+    smoothY += (targetY - smoothY) * 0.3;
+  }
+
   // 顶部空间不够就往下压，宁可压到她也不要出框
   const y = Math.max(smoothY, h + 4);
 
-  bubbleEl.style.left = `${Math.round(x)}px`;
+  bubbleEl.style.left = `${Math.round(smoothX)}px`;
   bubbleEl.style.top = `${Math.round(y)}px`;
 
   // 气泡被窗口挤开多少，尾巴就补回多少，始终指着她
-  const tail = Math.min(Math.max(smoothX - x + half, 12), Math.max(w - 12, 12));
+  const tail = Math.min(Math.max(ax - smoothX + half, 12), Math.max(w - 12, 12));
   bubbleEl.style.setProperty('--tail-x', `${Math.round(tail)}px`);
 }
 
@@ -332,10 +373,10 @@ app.ticker.add(() => {
   placeBubble();
 });
 
-// 换显示器 / 改缩放时头顶位置会变，重新量一次
+// 换显示器 / 改缩放时角色位置会变，重新量一次剖面
 window.addEventListener('resize', () => {
-  headTopOffset = null;
-  requestAnimationFrame(() => requestAnimationFrame(measureHeadTop));
+  topProfile = null;
+  requestAnimationFrame(() => requestAnimationFrame(measureTopProfile));
 });
 
 /* ------------------------------------------------------------------ *
@@ -346,6 +387,7 @@ let bubbleTimer = null;
 function hideBubble() {
   bubbleVisible = false;
   bubbleEl.classList.remove('show');
+  window.PET_VOICE.stop();
 }
 
 function say(text, duration = 6000) {
@@ -359,11 +401,30 @@ function say(text, duration = 6000) {
   bubbleTimer = setTimeout(hideBubble, duration);
 }
 
+/**
+ * 有语音就用语音，没语音就退回原始台词。
+ *
+ * 字幕跟语音原文走：气泡里显示的就是这句语音本身在说的话，
+ * 不然会出现"她在说一句、屏幕上是另一句"的错位。
+ * lines.js 里的原创台词保留，作为没有语音时的兜底。
+ */
+function speakWithVoice(list, fallbackMs = 6000) {
+  const line = window.PET_VOICE.pick();
+  if (!line) {
+    say(window.PET_PICK(list), fallbackMs);
+    return;
+  }
+  say(line.text, Math.round(line.dur * 1000) + 900);
+  line.play();
+}
+
 // 调试钩子：自动化验证用，也可以从 DevTools 手动触发动画
 window.__petDebug = {
   play,
   playOnce,
   say,
+  speak: () => speakWithVoice(L.click),
+  voice: () => window.PET_VOICE.status(),
   state: () => ({
     anchor: bubbleAnchor(),
     head: headBone ? { x: Math.round(headBone.worldX), y: Math.round(headBone.worldY) } : null,
@@ -387,7 +448,7 @@ function onTap() {
   window.pet.click();
 
   playOnce('interact');
-  say(window.PET_PICK(L.click), 3800);
+  speakWithVoice(L.click);
 }
 
 document.addEventListener('pointerdown', (e) => {

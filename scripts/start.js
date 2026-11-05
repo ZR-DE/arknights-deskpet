@@ -24,6 +24,10 @@ if (passthrough.includes('--spine-test')) {
   env.PET_SPINE_TEST = '1';
 }
 
+if (passthrough.includes('--voice-label')) {
+  env.PET_VOICE_LABEL = '1';
+}
+
 const child = spawn(electronBinary, [path.join(__dirname, '..'), ...passthrough], {
   stdio: 'inherit',
   env,

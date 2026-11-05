@@ -26,10 +26,10 @@ assets/character/
 
 ## 换成你的角色
 
-只改 `src/renderer/pet.js` 顶部这一段，其他代码不用动：
+只改 `src/renderer/character.js`，其他代码不用动：
 
 ```js
-const CHARACTER = {
+window.PET_CHARACTER = {
   skeleton: 'pet://character/你的文件.skel',
   anim: {
     idle: 'Default',
@@ -60,4 +60,40 @@ npm run spine:test
 
 ## audio/
 
-语音放这里，命名随意。当前版本还没接播放逻辑，先把文件准备好即可。
+三个文件，名字固定（要换名字就改 `src/main/main.js` 顶部的 `VOICE` 常量，只有那一处）：
+
+```
+assets/audio/
+├── amiya.ogg               # 原始语音包，整包一个文件
+├── amiya.segments.json     # 切好的分段表（脚本生成）
+└── amiya.lines.json        # 标注好的字幕（标注工具生成）
+```
+
+### amiya.ogg
+
+游戏解包出来的语音是**一个角色一个长音频**，几十分钟首尾相接。原样放进来就行，
+不需要自己切——切分由脚本做。
+
+### amiya.segments.json
+
+```bash
+python scripts/segment-voice.py assets/audio/amiya.ogg --analyze      # 先看间隔分布
+python scripts/segment-voice.py assets/audio/amiya.ogg \
+  -o assets/audio/amiya.segments.json --gap 0.22
+```
+
+`--analyze` 会打印静音间隔的直方图，**谷底就是最佳切点**。默认值是通用猜测，
+不同的语音包差别很大（同样是阿米娅，术师包实测 0.22 切出 104 段，0.3 就只有 67 段）。
+需要 `soundfile` 和 `numpy`：`pip install soundfile numpy`。
+
+### amiya.lines.json
+
+双击 `标注语音.cmd` 打开的窗口里，边听边把字幕打进去，Ctrl+S 保存。
+格式就是运行时读的东西：
+
+```json
+{ "lines": [ { "start": 1.24, "dur": 1.59, "text": "……" } ] }
+```
+
+留空的句子不会被选中。**这个文件里是游戏台词原文，和语音同等性质，不要提交。**
+
