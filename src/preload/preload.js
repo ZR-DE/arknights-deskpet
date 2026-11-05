@@ -33,6 +33,15 @@ contextBridge.exposeInMainWorld('pet', {
     return () => ipcRenderer.removeListener('pet:muted', handler);
   },
 
+  /* 姿态：托盘里手动指定，或交还给状态机 */
+  setMood: (id) => ipcRenderer.send('pet:set-mood', String(id)),
+  reportMood: (mood, locked) => ipcRenderer.send('pet:mood-state', { mood: String(mood), locked: Boolean(locked) }),
+  onMoodSet: (fn) => {
+    const handler = (_e, id) => fn(String(id));
+    ipcRenderer.on('pet:mood-set', handler);
+    return () => ipcRenderer.removeListener('pet:mood-set', handler);
+  },
+
   /* 标注工具 */
   voiceLoad: () => ipcRenderer.invoke('voice:load'),
   voiceSave: (payload) => ipcRenderer.invoke('voice:save', payload),

@@ -494,6 +494,52 @@ function createWindow() {
     }, 3200);
   }
 
+  /**
+   * 手动姿态验收：走 pet:mood-set 这条真实 IPC（托盘点菜就是发它），
+   * 确认锁定后不被时间驱走，并且交互能解锁。
+   */
+  if (process.env.PET_MOOD_SET_PROBE === '1') {
+    setTimeout(async () => {
+      const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+      const run = (js) => win.webContents.executeJavaScript(js);
+      const snap = async (label) => {
+        const s = await run(`({ mood: window.__diag.mood, locked: window.__diag.locked })`);
+        // 同时看主进程侧：托盘菜单的勾选读的就是 moodState
+        console.log('[mset] ' + JSON.stringify({ label, ...s, tray: moodState }));
+      };
+
+      await snap('初始');
+      win.webContents.send('pet:mood-set', 'sit');
+      await wait(2600);
+      await snap('手动坐下');
+
+      // 把「上次互动」推到十分钟前：锁定状态下不该被时间驱到 sleep
+      await run(`window.__petDebug.ago(600)`);
+      await wait(3800);
+      await snap('坐十分钟后（应仍 sit）');
+
+      // 点一下：应该站起来并解锁
+      const hit = await run(
+        `(() => { const r = window.__diag.hitRect; return r ? { x: Math.round(r.x + r.w / 2), y: Math.round(r.y + r.h / 2) } : { x: 0, y: 0 }; })()`
+      );
+      win.webContents.sendInputEvent({ type: 'mouseDown', x: hit.x, y: hit.y, button: 'left', clickCount: 1 });
+      win.webContents.sendInputEvent({ type: 'mouseUp', x: hit.x, y: hit.y, button: 'left', clickCount: 1 });
+      await wait(2600);
+      await snap('点一下（应 idle 且解锁）');
+
+      win.webContents.send('pet:mood-set', 'sleep');
+      await wait(2600);
+      await snap('手动睡着');
+
+      win.webContents.send('pet:mood-set', 'auto');
+      await wait(2600);
+      await snap('选回自动');
+
+      console.log('[mset] done');
+      app.exit(0);
+    }, 3200);
+  }
+
   /** 待机幅度 + 坐下瞬间的出框曲线 */
   if (process.env.PET_IDLE_PROBE === '1') {
     setTimeout(async () => {
@@ -717,6 +763,34 @@ function outfitSubmenu() {
   }));
 }
 
+/** 姿态菜单。auto 交还给状态机，其余是手动指定并锁住 */
+const MOOD_ITEMS = [
+  { id: 'auto', label: '自动（跟着时间走）' },
+  { id: 'idle', label: '待机 · 站着' },
+  { id: 'relax', label: '放松' },
+  { id: 'sit', label: '坐下' },
+  { id: 'sleep', label: '睡着' },
+];
+
+/** 渲染层上报的当前姿态。托盘菜单的勾选跟着它走，手动切和自动演进都同步 */
+let moodState = { mood: 'idle', locked: false };
+
+const MOOD_NAMES = { idle: '待机', relax: '放松', sit: '坐下', sleep: '睡着' };
+
+function moodSubmenu() {
+  return MOOD_ITEMS.map((m) => ({
+    // 自动模式时把她当前实际状态写进标题，否则光看勾选不知道她现在是站着还是坐着
+    label: m.id === 'auto' ? `自动（当前：${MOOD_NAMES[moodState.mood] || '待机'}）` : m.label,
+    type: 'radio',
+    checked: m.id === 'auto' ? !moodState.locked : moodState.locked && moodState.mood === m.id,
+    click: () => {
+      moodState = m.id === 'auto' ? { mood: moodState.mood, locked: false } : { mood: m.id, locked: true };
+      if (win && !win.isDestroyed()) win.webContents.send('pet:mood-set', m.id);
+      refreshTray();
+    },
+  }));
+}
+
 function buildTrayMenu() {
   return Menu.buildFromTemplate([
     {
@@ -742,6 +816,10 @@ function buildTrayMenu() {
     {
       label: '换装',
       submenu: outfitSubmenu(),
+    },
+    {
+      label: '姿态',
+      submenu: moodSubmenu(),
     },
     {
       label: '静音（只显示文字）',
@@ -850,6 +928,14 @@ ipcMain.handle('pet:voice-info', () => {
 });
 
 ipcMain.handle('pet:is-muted', () => muted);
+
+// 渲染层切完姿态回报，托盘勾选跟着走（自动演进也会来这里）
+ipcMain.on('pet:mood-state', (_event, state) => {
+  const next = { mood: String((state && state.mood) || 'idle'), locked: Boolean(state && state.locked) };
+  if (next.mood === moodState.mood && next.locked === moodState.locked) return;
+  moodState = next;
+  refreshTray();
+});
 
 ipcMain.handle('voice:load', () => {
   const segFile = audioPath(VOICE.segments);

@@ -36,6 +36,8 @@ let headBone = null;
 let currentOutfitId = null;
 /** 她现在是什么状态：idle / relax / sit / sleep，见下方「休息状态机」 */
 let mood = 'idle';
+/** 手动指定姿态时锁住状态机，不再按时间自动演进；一交互就解锁 */
+let moodLocked = false;
 
 /**
  * 微动容器：骨架的 Default 是静止的，呼吸和换重心都在外层做，不碰骨骼。
@@ -321,6 +323,7 @@ function refreshDiag() {
     headBone: headBone ? headBone.data.name : null,
     outfit: currentOutfitId,
     mood,
+    locked: moodLocked,
     hitRect: hitRect
       ? {
           x: Math.round(hitRect.x),
@@ -612,12 +615,12 @@ window.__petDebug = {
   // 走完整链路：主进程落设置 -> 推事件 -> 渲染层换骨架。和点托盘菜单是同一条路
   outfit: () => currentOutfitId,
   setOutfit: (id) => window.pet.setOutfit(id),
-  // 状态机：不传参就返回当前状态，传了就强制切（验收用，不等那几分钟）
+  // 状态机：不传参就返回当前状态，传了就强制切（验收用，不走手动锁定）
   mood: (name) => {
     if (!name) return mood;
-    enterMood(name);
-    return mood;
+    return setMood(name, { manual: false });
   },
+  moodLocked: () => moodLocked,
   /**
    * 假装她已经被晾了 N 秒，然后重新排程。
    * 用来验证「闲置多久会自己坐下」这条链路，不用真等一分半。
@@ -800,6 +803,9 @@ function restStageAfter(current) {
 
 function scheduleMood() {
   clearTimeout(moodTimer);
+  // 手动指定过姿态就停在这里，等她自己被叫醒或用户选回「自动」
+  if (moodLocked) return;
+
   const stage = restStageAfter(mood);
 
   if (!stage) {
@@ -826,25 +832,55 @@ function scheduleMood() {
 function enterMood(next) {
   if (mood === next) return;
 
+  // 先记下目标：骨架还没上台时也能定，加载完会按它恢复
+  mood = next;
+  clearTimeout(moodTimer);
+
   if (!spine) {
-    // 骨架还没上台（或加载失败）。过一会儿再试，别让状态机就此停摆
-    moodTimer = setTimeout(scheduleMood, 30e3);
+    if (!moodLocked) moodTimer = setTimeout(scheduleMood, 30e3);
+    reportMood();
     return;
   }
 
-  mood = next;
   currentAnim = null;
   play(next, true);
   // 立刻开始逐帧托住底边；收尾那次测量由 settle 结束时统一做，不用再排一次
   beginSettle();
   resetSway();
   scheduleMood();
+  reportMood();
   refreshDiag();
 }
 
-/** 叫醒：任何互动都先走这里，把她叫回来并重新开始计时 */
+/** 手动指定姿态。manual=false 时只切不改锁定，调试钩子用这条路 */
+function setMood(id, { manual = false } = {}) {
+  const target = String(id || 'auto');
+
+  if (target === 'auto') {
+    moodLocked = false;
+    if (mood === 'idle') scheduleMood();
+    else wake(); // 交还给状态机：先站起来，重新计时
+    reportMood();
+    return mood;
+  }
+
+  if (!REST_STAGES.some((s) => s.mood === target) && target !== 'idle') return mood;
+
+  moodLocked = manual;
+  if (mood === target) {
+    scheduleMood();
+    reportMood();
+    return mood;
+  }
+
+  enterMood(target);
+  return mood;
+}
+
+/** 叫醒：任何互动都先走这里，把她叫回来、解锁手动姿态并重新开始计时 */
 function wake() {
   const wasResting = mood !== 'idle';
+  moodLocked = false;
   mood = 'idle';
   if (wasResting && spine) {
     currentAnim = null;
@@ -854,6 +890,15 @@ function wake() {
     refreshDiag();
   }
   scheduleMood();
+  reportMood();
+}
+
+/** 把姿态报给主进程，托盘勾选和这里保持一致。去重是因为 wake 每次点击都会调 */
+let reported = { mood: null, locked: null };
+function reportMood() {
+  if (reported.mood === mood && reported.locked === moodLocked) return;
+  reported = { mood, locked: moodLocked };
+  window.pet.reportMood(mood, moodLocked);
 }
 
 /**
@@ -935,6 +980,12 @@ function scheduleIdle() {
 
   currentOutfitId = info.current.id;
   const ok = await mountOutfit(info.current.url, { silent: true });
+
+  // 托盘的「姿态」菜单。手动选中会锁住状态机，下次交互自动解锁
+  if (typeof window.pet.onMoodSet === 'function') {
+    window.pet.onMoodSet((id) => setMood(id, { manual: id !== 'auto' }));
+  }
+  reportMood();
 
   if (ok) {
     startGreeting();
