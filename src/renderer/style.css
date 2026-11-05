@@ -31,13 +31,17 @@ body {
   /* max-content 很关键：绝对定位元素的可用宽度是「窗口宽 - left」，
      不写死就会越靠右越窄，文字被迫折行，气泡高度乱跳 */
   width: max-content;
-  max-width: 250px;
-  padding: 9px 13px;
-  border-radius: 12px;
+  /* 窗口缩到 228 宽了，气泡不能再按 250 来——超出窗口就会被 placeBubble 挤回来，
+     宽度算两次很容易抖。留 16px 边 */
+  max-width: 196px;
+  padding: 7px 10px;
+  border-radius: 10px;
   background: rgba(22, 26, 31, 0.86);
   color: #f2f4f3;
-  font-size: 13px;
-  line-height: 1.55;
+  /* 窗口缩到六成，字不能跟着缩到六成（13 → 8px 就看不清了）。
+     压在 12px：比原来小一号，但落在 228 宽的窗口里仍然好读 */
+  font-size: 12px;
+  line-height: 1.5;
   letter-spacing: 0.2px;
   white-space: pre-wrap;
   word-break: break-word;
@@ -56,10 +60,10 @@ body {
   content: "";
   position: absolute;
   left: var(--tail-x, 50%);
-  bottom: -5px;
-  width: 10px;
-  height: 10px;
-  margin-left: -5px;
+  bottom: -4px;
+  width: 8px;
+  height: 8px;
+  margin-left: -4px;
   background: rgba(22, 26, 31, 0.86);
   transform: rotate(45deg);
   border-radius: 2px;

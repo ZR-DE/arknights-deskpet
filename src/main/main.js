@@ -134,10 +134,18 @@ protocol.registerSchemesAsPrivileged([
   },
 ]);
 
-const WIN_WIDTH = 380;
+/**
+ * 窗口尺寸决定角色多大——渲染层是按窗口宽高自适应缩放的，改这里就等于改体型。
+ *
+ * 现在是原来的六成（380×620 → 228×372）。
+ * 改大小要连着 pet.js 的 BUBBLE_RESERVE 一起按同比例改：
+ * 角色只在「窗口高 - 顶部气泡预留」里排，只缩窗口不缩预留的话，
+ * 预留占比变大，她会比预期还小一圈（实测会小到 0.57 倍而不是 0.6）。
+ */
+const WIN_WIDTH = 228;
 // 高度里有一段是留给头顶气泡的：角色本身只占下半部分（见 pet.js 的 BUBBLE_RESERVE）。
 // 不留这段的话，人和气泡塞在一个窗口里，气泡会被顶到耳朵上。
-const WIN_HEIGHT = 620;
+const WIN_HEIGHT = 372;
 const EDGE_MARGIN = 16;
 
 let win = null;
@@ -238,7 +246,7 @@ function createWindow() {
   });
 
   // --dev：开一个独立的 DevTools 窗口方便看报错。
-  // 用 detach 而不是内嵌，否则 DevTools 会占掉这个 380x520 的透明窗口。
+  // 用 detach 而不是内嵌，否则 DevTools 会占掉这个 228x372 的透明窗口。
   if (DEV_MODE) {
     win.webContents.openDevTools({ mode: 'detach' });
   }
@@ -287,8 +295,12 @@ function createWindow() {
         try {
           const wait = (ms) => new Promise((r) => setTimeout(r, ms));
           await win.webContents.executeJavaScript(`window.__petDebug.say('')`);
-          win.webContents.sendInputEvent({ type: 'mouseDown', x: 192, y: 380, button: 'left', clickCount: 1 });
-          win.webContents.sendInputEvent({ type: 'mouseUp', x: 192, y: 380, button: 'left', clickCount: 1 });
+          // 点角色命中框的中心，别写死坐标——窗口尺寸改过一次，硬编码的坐标就飘到人身上了
+          const c = await win.webContents.executeJavaScript(
+            `(() => { const r = (window.__diag || {}).hitRect; return r ? { x: Math.round(r.x + r.w / 2), y: Math.round(r.y + r.h / 2) } : { x: 0, y: 0 }; })()`
+          );
+          win.webContents.sendInputEvent({ type: 'mouseDown', x: c.x, y: c.y, button: 'left', clickCount: 1 });
+          win.webContents.sendInputEvent({ type: 'mouseUp', x: c.x, y: c.y, button: 'left', clickCount: 1 });
           await wait(800);
           const probe = await win.webContents.executeJavaScript(`(() => ({
             voice: window.__petDebug.voice(),
@@ -504,9 +516,11 @@ function createWindow() {
       await step('闲置 250s', 250);
       await step('闲置 620s（非深夜，应停在 sit）', 620);
 
-      // 点一下，看她能不能从坐姿站起来
-      win.webContents.sendInputEvent({ type: 'mouseDown', x: 192, y: 430, button: 'left', clickCount: 1 });
-      win.webContents.sendInputEvent({ type: 'mouseUp', x: 192, y: 430, button: 'left', clickCount: 1 });
+      // 点一下，看她能不能从坐姿站起来。坐标取当前命中框中心，
+      // 不写死——坐下后她的位置和大小都变了，写死就可能点空
+      const hit = await run(`(() => { const r = window.__diag.hitRect; return r ? { x: Math.round(r.x + r.w / 2), y: Math.round(r.y + r.h / 2) } : { x: 0, y: 0 }; })()`);
+      win.webContents.sendInputEvent({ type: 'mouseDown', x: hit.x, y: hit.y, button: 'left', clickCount: 1 });
+      win.webContents.sendInputEvent({ type: 'mouseUp', x: hit.x, y: hit.y, button: 'left', clickCount: 1 });
       await wait(3400);
       const after = await run(
         `({ mood: window.__diag.mood, rect: window.__diag.hitRect, bubble: document.getElementById('bubble').classList.contains('show') })`
