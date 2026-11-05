@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 470" width="240" height="470" role="img" aria-label="占位角色">
+  <title>占位角色</title>
+  <g>
+    <rect x="97" y="300" width="17" height="132" rx="8.5" fill="#2F3E46"/>
+    <rect x="126" y="300" width="17" height="132" rx="8.5" fill="#2F3E46"/>
+    <ellipse cx="106" cy="437" rx="16" ry="9" fill="#243139"/>
+    <ellipse cx="135" cy="437" rx="16" ry="9" fill="#243139"/>
+
+    <path d="M84 126 C96 112 144 112 156 126 L168 302 C140 314 100 314 72 302 Z" fill="#35464F"/>
+    <path d="M104 122 L120 146 L136 122" fill="none" stroke="#243139" stroke-width="4" stroke-linecap="round"/>
+
+    <path d="M92 138 Q74 200 80 258" fill="none" stroke="#35464F" stroke-width="17" stroke-linecap="round"/>
+    <path d="M148 138 Q166 200 160 258" fill="none" stroke="#35464F" stroke-width="17" stroke-linecap="round"/>
+    <circle cx="80" cy="262" r="9" fill="#2F3E46"/>
+    <circle cx="160" cy="262" r="9" fill="#2F3E46"/>
+
+    <rect x="110" y="104" width="20" height="24" fill="#35464F"/>
+
+    <ellipse cx="120" cy="72" rx="37" ry="40" fill="#35464F"/>
+    <path d="M83 70 C84 34 156 34 157 70 C150 52 130 46 120 52 C110 46 90 52 83 70 Z" fill="#2B3A42"/>
+
+    <ellipse cx="106" cy="80" rx="3.6" ry="4.8" fill="#DCE6E2"/>
+    <ellipse cx="134" cy="80" rx="3.6" ry="4.8" fill="#DCE6E2"/>
+  </g>
+</svg>

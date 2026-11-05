@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self' file: data:; img-src 'self' file: data:; style-src 'self' 'unsafe-inline'; script-src 'self' file:"
+    />
+    <title>deskpet</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <div id="stage">
+      <div id="bubble" class="bubble" aria-live="polite">
+        <span id="bubble-text"></span>
+      </div>
+
+      <div id="pet" class="pet">
+        <div id="pet-sway" class="pet-sway">
+          <div id="pet-breathe" class="pet-breathe">
+            <img
+              id="layer-body"
+              class="layer"
+              src="../../assets/character/body.png"
+              alt=""
+              draggable="false"
+            />
+            <img
+              id="layer-eyes"
+              class="layer layer-eyes"
+              src="../../assets/character/eyes.png"
+              alt=""
+              draggable="false"
+            />
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script src="lines.js"></script>
+    <script src="pet.js"></script>
+  </body>
+</html>

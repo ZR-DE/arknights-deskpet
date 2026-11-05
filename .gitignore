@@ -1,0 +1,45 @@
+# 依赖与构建产物
+node_modules/
+dist/
+out/
+build/
+
+# 运行时数据
+data/
+*.log
+
+# 系统垃圾
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ============================================================
+# 游戏素材：任何情况下都不得提交
+#
+# 明日方舟的立绘、Spine 骨骼动画、语音均为鹰角网络资产。
+# 本仓库只托管代码，不分发素材。使用者需自行准备。
+# 详见 assets/README.md
+# ============================================================
+/assets/character/**
+!/assets/character/.gitkeep
+/assets/audio/**
+!/assets/audio/.gitkeep
+
+# 文件类型兜底：防止素材被误放到别的目录
+*.skel
+*.atlas
+*.ogg
+*.mp3
+*.wav
+*.m4a
+/assets/**/*.png
+/assets/**/*.jpg
+/assets/**/*.jpeg
+/assets/**/*.webp
+
+# 自产资源放行（托盘图标、占位图等）
+!/assets/brand/**
+
+# 调试截图
+/pet-smoke.png
+/pet-desktop.png

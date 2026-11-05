@@ -1,0 +1,24 @@
+{
+  "name": "arknights-deskpet",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A quiet desktop companion. Code only — no game assets are included or distributed.",
+  "main": "src/main/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "icon": "node scripts/make-tray-icon.js"
+  },
+  "keywords": [
+    "desktop-pet",
+    "electron",
+    "companion"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "electron": "^45.2.3"
+  }
+}
