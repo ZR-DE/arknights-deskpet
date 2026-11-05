@@ -43,12 +43,7 @@ function write(data) {
   }
 }
 
-/**
- * 每次启动调用一次。返回当前的陪伴状态。
- * days   累计见面的天数
- * streak 连续见面的天数
- * today  今天是否是第一次见面
- */
+/** 每次启动调一次：更新累计天数、连续天数，并告诉调用方今天是不是第一次见面 */
 function touch() {
   const now = new Date();
   const today = dayKey(now);

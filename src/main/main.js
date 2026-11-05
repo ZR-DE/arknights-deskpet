@@ -21,19 +21,10 @@ const ASSETS_ROOT = path.join(__dirname, '..', '..', 'assets');
 const AUDIO_DIR = path.join(ASSETS_ROOT, 'audio');
 const CHARACTER_DIR = path.join(ASSETS_ROOT, 'character');
 
-/**
- * 时装清单的唯一来源。
- * 这里只列"应该有哪些"，实际可用与否要按文件是否存在过滤——
- * 别人 clone 下来没有素材，菜单里就不该冒出点不动的项。
- */
+/** 时装清单的唯一来源。实际可用与否按文件是否存在过滤，没素材的人不该看到点不动的项 */
 const OUTFIT_LIST = require('../shared/outfits.json').outfits;
 
-/**
- * 语音文件名的唯一来源。
- *
- * 渲染层不再自己拼路径，启动时通过 IPC 取——之前角色路径写了两份，
- * 换素材时改漏一处，调试页和桌面看到的不是同一个人。
- */
+/** 语音文件名的唯一来源。渲染层通过 IPC 取，不自己拼路径，免得改漏一处 */
 const VOICE = {
   pack: 'amiya.ogg',
   segments: 'amiya.segments.json',
@@ -115,11 +106,8 @@ const MIME = {
 };
 
 /**
- * 自定义协议。
- *
- * 为什么不能直接 file://：pixi 用 XHR 读 .skel 和 .atlas，
- * file:// 页面的 origin 是 null，请求会被 CORS 拦下来。
- * 走一个带 corsEnabled 的私有协议，既绕开限制又不放宽 webSecurity。
+ * 自定义协议：file:// 的 origin 是 null，pixi 用 XHR 读素材会被 CORS 拦，
+ * 用带 corsEnabled 的私有协议绕开，同时保持 webSecurity 开启。
  */
 protocol.registerSchemesAsPrivileged([
   {
@@ -135,16 +123,10 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 /**
- * 窗口尺寸决定角色多大——渲染层是按窗口宽高自适应缩放的，改这里就等于改体型。
- *
- * 现在是原来的六成（380×620 → 228×372）。
- * 改大小要连着 pet.js 的 BUBBLE_RESERVE 一起按同比例改：
- * 角色只在「窗口高 - 顶部气泡预留」里排，只缩窗口不缩预留的话，
- * 预留占比变大，她会比预期还小一圈（实测会小到 0.57 倍而不是 0.6）。
+ * 窗口尺寸就是角色尺寸（渲染层按窗口自适应）。
+ * 改体型时 pet.js 的 BUBBLE_RESERVE 要跟着同比例改，否则缩放不是预期倍数。
  */
 const WIN_WIDTH = 228;
-// 高度里有一段是留给头顶气泡的：角色本身只占下半部分（见 pet.js 的 BUBBLE_RESERVE）。
-// 不留这段的话，人和气泡塞在一个窗口里，气泡会被顶到耳朵上。
 const WIN_HEIGHT = 372;
 const EDGE_MARGIN = 16;
 
@@ -164,13 +146,7 @@ app.on('second-instance', () => {
   if (!win || win.isDestroyed()) return;
   win.showInactive();
 
-  /**
-   * 用户又点了一次启动器：多半是刚更新过代码（或者上次没关干净）。
-   *
-   * 不 reload 的话，已经跑着的旧进程会一直用内存里的旧脚本，
-   * 新功能永远不生效，用户看到的就是"双击了但什么都没变"——
-   * 这种情况只能去托盘退出再启动，很容易被当成程序坏了。
-   */
+  /** 又点了一次启动器：reload 一下，否则旧进程一直跑内存里的旧脚本 */
   if (process.env.PET_SMOKE !== '1' && process.env.PET_OUTFIT_SWEEP !== '1') {
     win.webContents.reload();
   }
@@ -194,11 +170,7 @@ function applyIgnore(next) {
   }
 }
 
-/**
- * 渲染进程日志转发。
- * 新版 Electron 只传一个事件对象，而且会按参数个数判断是不是旧写法——
- * 只要声明了 (event, level, message)，就会一直刷 deprecation。所以只收一个参数。
- */
+/** 转发渲染进程日志。新 Electron 只传一个事件对象，多声明参数会刷 deprecation */
 function forwardConsole(tag) {
   return (event) => {
     console.log(`[${tag}] ${(event && event.message) || ''}`);
@@ -365,11 +337,7 @@ function createWindow() {
     }, 3500);
   }
 
-  /**
-   * 六套时装逐个切换验收。
-   * 走的是完整链路：写设置 -> IPC 推送 -> 渲染层销毁旧骨架换新的，
-   * 和点托盘菜单是同一条路，不是直接改渲染层变量。
-   */
+  /** 时装验收：走完整链路（写设置 → IPC → 渲染层换骨架），和点托盘是同一条路 */
   if (process.env.PET_OUTFIT_SWEEP === '1') {
     setTimeout(async () => {
       const wait = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -491,12 +459,7 @@ function createWindow() {
     }, 3200);
   }
 
-  /**
-   * 状态机流转验收。
-   *
-   * 不靠肉眼等一分半：把"上次互动时间"往前推，让真实的定时器自己到点。
-   * 走的是和生产完全一样的链路，只是时间戳被改了。
-   */
+  /** 状态流转验收：把「上次互动时间」往前推，让真实定时器自己到点，不用干等 */
   if (process.env.PET_FLOW_PROBE === '1') {
     setTimeout(async () => {
       const wait = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -531,12 +494,7 @@ function createWindow() {
     }, 3200);
   }
 
-  /**
-   * 待机动作幅度 + 坐下瞬间出框曲线。
-   *
-   * 「太呆滞」是主观判断，先量一下 Default 到底动了多少；
-   * 「刚坐下腿会没」也要知道消失持续多久，才知道要修到什么程度。
-   */
+  /** 待机幅度 + 坐下瞬间的出框曲线 */
   if (process.env.PET_IDLE_PROBE === '1') {
     setTimeout(async () => {
       const wait = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -589,12 +547,7 @@ function createWindow() {
     }, 3200);
   }
 
-  /**
-   * Interact 到底是个什么动作？
-   *
-   * 想拿它当「她自己动一下」用，得先看清楚：要是"被戳到缩一下"那种反应，
-   * 无端播出来就很怪。每 260ms 截一帧，连起来看。
-   */
+  /** 逐帧截 Interact，确认它是不是「被戳到缩一下」那种反应 */
   if (process.env.PET_ACT_PROBE === '1') {
     setTimeout(async () => {
       const wait = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -657,12 +610,7 @@ function createWindow() {
   }
 }
 
-/**
- * 语音标注窗口。
- *
- * 和桌宠窗口完全两套东西：有标题栏、可缩放、不透明、不进托盘。
- * 它的唯一用途是让人边听边把每段语音的字幕打上去。
- */
+/** 语音标注窗口：有标题栏、可缩放、不透明，和桌宠是两套东西 */
 function createLabelWindow() {
   labelWin = new BrowserWindow({
     width: 940,
@@ -866,11 +814,7 @@ ipcMain.handle('pet:companion', () => companion);
  * 时装
  * ------------------------------------------------------------------ */
 
-/**
- * 渲染层启动时来问"我现在该穿哪套、还有哪些能换"。
- * 路径由主进程拼，渲染层不自己拼文件名——和语音一样的理由，
- * 名字只在一处定义，换素材不会改漏。
- */
+/** 渲染层启动时问该穿哪套、还有哪些能换。文件名只在主进程拼 */
 ipcMain.handle('pet:outfits', () => ({
   current: currentOutfit ? publicOutfit(currentOutfit) : null,
   list: availableOutfits().map(publicOutfit),

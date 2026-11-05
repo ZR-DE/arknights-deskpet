@@ -1,13 +1,8 @@
 'use strict';
 
 /**
- * Spine 加载验证页。
- *
- * 只做一件事：确认 pixi-spine 能不能正确解析这份 3.8.99 的 .skel，
- * 顺便把所有动画名列出来——后面做状态机要靠这张名字表。
- *
- * 用 PIXI.Assets 而不是老的 PIXI.Loader：pixi 7.4 的 UMD 里已经没有 Loader，
- * 而 pixi-spine 4.0.6 注册了 Assets 的 LoadParser，并会自动去找同名 .atlas。
+ * Spine 加载验证页：确认 pixi-spine 能解析这份 .skel，并列出全部动画名。
+ * 用 PIXI.Assets（pixi 7.4 的 UMD 里没有 Loader），pixi-spine 会自动找同名 .atlas。
  */
 
 const WIDTH = window.innerWidth || 380;

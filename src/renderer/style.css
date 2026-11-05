@@ -19,27 +19,22 @@ body {
   z-index: 1;
 }
 
-/* 气泡不锚在窗口上，而是由 JS 每帧算到头顶——
-   位置来自骨架里的头骨（F_Head_I），所以她动、换动作、被拖走，
-   气泡都跟着走。left/top 是 JS 写入的屏幕坐标，初始值只是兜底。 */
+/* 气泡由 JS 按头骨位置铺到头顶，left/top 是每帧写入的坐标，这里的初始值只是兜底 */
 .bubble {
   position: absolute;
   left: 50%;
   top: 60px;
   z-index: 2;
   transform: translate(-50%, -100%) translateY(7px);
-  /* max-content 很关键：绝对定位元素的可用宽度是「窗口宽 - left」，
-     不写死就会越靠右越窄，文字被迫折行，气泡高度乱跳 */
+  /* max-content 不能省：绝对定位的可用宽度是「窗口宽 - left」，不写死会越靠右越窄 */
   width: max-content;
-  /* 窗口缩到 228 宽了，气泡不能再按 250 来——超出窗口就会被 placeBubble 挤回来，
-     宽度算两次很容易抖。留 16px 边 */
+  /* 不能超过窗口宽，否则会被 placeBubble 反复挤回来，宽度抖 */
   max-width: 196px;
   padding: 7px 10px;
   border-radius: 10px;
   background: rgba(22, 26, 31, 0.86);
   color: #f2f4f3;
-  /* 窗口缩到六成，字不能跟着缩到六成（13 → 8px 就看不清了）。
-     压在 12px：比原来小一号，但落在 228 宽的窗口里仍然好读 */
+  /* 只有 12px：窗口小，但字不能再小，否则看不清 */
   font-size: 12px;
   line-height: 1.5;
   letter-spacing: 0.2px;

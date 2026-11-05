@@ -1,9 +1,7 @@
 'use strict';
 
 /**
- * 生成托盘图标（无第三方依赖，手写 PNG 编码）。
- * 产物：assets/brand/tray.png —— 白色圆环，深浅任务栏都能看清。
- *
+ * 生成托盘图标，零依赖手写 PNG 编码。产物 assets/brand/tray.png。
  * 用法：npm run icon
  */
 

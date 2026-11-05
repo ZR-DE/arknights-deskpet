@@ -3,16 +3,10 @@
 /**
  * 把解包的时装素材导入 assets/character/。
  *
- * 为什么要改名而不是原样拷进去：
- * 原始文件名带 `#`（build_char_002_amiya_epoque#4.png），而 `#` 在 URL 里是
- * fragment 分隔符——`pet://character/xxx_epoque#4.png` 会被截成 `..._epoque`，
- * 图集直接 404。所以统一改成 URL 安全的 `amiya-*` 前缀。
+ * 必须改名：原始文件名带 `#`，在 URL 里会被当作 fragment 截断，图集 404。
+ * atlas 第 2 行写着页名，改名后要同步改，否则 Spine 找不到图集页。
  *
- * atlas 里第 2 行写着页（png）的文件名，改名之后必须同步改，
- * 否则 Spine 会去找一个不存在的图集页。
- *
- * 用法：node scripts/import-outfits.js
- * 素材默认从 素材/Amiya/<编号>/ 读，编号映射见下面的 SOURCE。
+ * 用法：node scripts/import-outfits.js（素材读 素材/Amiya/<编号>/，映射见 SOURCE）
  */
 
 const fs = require('node:fs');
