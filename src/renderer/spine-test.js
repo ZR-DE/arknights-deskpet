@@ -13,7 +13,8 @@
 const WIDTH = window.innerWidth || 380;
 const HEIGHT = window.innerHeight || 520;
 
-const SKELETON = window.PET_CHARACTER.skeleton;
+// 现在有多套时装，路径由主进程给；这里验的是"当前穿的那件"
+let SKELETON = null;
 
 window.__diag = {
   stage: 'boot',
@@ -40,6 +41,12 @@ window.__diag.stage = 'app-created';
 
 (async () => {
   try {
+    const info = await window.pet.outfits();
+    if (!info || !info.current) throw new Error('没有可用时装（assets/character/ 缺三件套）');
+    SKELETON = info.current.url;
+    window.__diag.outfit = info.current.id;
+    window.__diag.outfits = (info.list || []).map((o) => `${o.id}:${o.name}`);
+
     const resource = await PIXI.Assets.load(SKELETON);
     window.__diag.stage = 'loaded';
 

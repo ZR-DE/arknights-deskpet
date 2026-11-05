@@ -13,6 +13,16 @@ contextBridge.exposeInMainWorld('pet', {
 
   companion: () => ipcRenderer.invoke('pet:companion'),
 
+  /* 时装 */
+  outfits: () => ipcRenderer.invoke('pet:outfits'),
+  setOutfit: (id) => ipcRenderer.invoke('pet:set-outfit', String(id)),
+  // 托盘里换了衣服，主进程推过来
+  onOutfitChanged: (fn) => {
+    const handler = (_e, outfit) => fn(outfit);
+    ipcRenderer.on('pet:outfit', handler);
+    return () => ipcRenderer.removeListener('pet:outfit', handler);
+  },
+
   /* 语音 */
   voiceInfo: () => ipcRenderer.invoke('pet:voice-info'),
   isMuted: () => ipcRenderer.invoke('pet:is-muted'),

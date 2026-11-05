@@ -21,16 +21,34 @@ assets/character/
 ```
 
 - `.atlas` 和 `.skel` 同名是硬性要求，加载器会自动按这个规则去找图集
-- `.atlas` 第一行引用的 png 文件名，必须和实际文件名一字不差
+- `.atlas` 里声明的 png 文件名，必须和实际文件名一字不差
 - 图集可以有多页（`xxx.png`、`xxx2.png`），atlas 里会分别声明
+
+**文件名里不能出现 `#`。** 素材原始名字长这样：`build_char_002_amiya_epoque#4.png`，
+而 `#` 在 URL 里是 fragment 分隔符——`pet://character/xxx#4.png` 会被浏览器截成
+`pet://character/xxx`，图集直接 404，角色一片空白。所以导入时统一改名成
+`amiya-epoque` 这种 URL 安全的形式，并同步改掉 atlas 里的页名。
+
+## 多套时装
+
+想放几套就放几套，每套一组三件套。清单写在 `src/shared/outfits.json`：
+
+```json
+{ "id": "epoque", "name": "术师 · epoque #4", "file": "amiya-epoque" }
+```
+
+`file` 是 `assets/character/` 下的共同前缀，`name` 是托盘菜单里显示的字。
+**素材不齐的那一套不会出现在菜单里**——比起点不动，不如看不见。
+
+如果你手上是解包的原始目录（`素材/Amiya/1/`、`2/`…），别手动拷：
+改完清单跑一次 `node scripts/import-outfits.js`，它会复制、改名、修 atlas 页名。
 
 ## 换成你的角色
 
-只改 `src/renderer/character.js`，其他代码不用动：
+动画名映射在 `src/renderer/character.js`：
 
 ```js
 window.PET_CHARACTER = {
-  skeleton: 'pet://character/你的文件.skel',
   anim: {
     idle: 'Default',
     interact: 'Interact',
@@ -42,7 +60,8 @@ window.PET_CHARACTER = {
 };
 ```
 
-右边的动画名按素材实际情况填。**填错不会崩**——找不到就自动退回 `idle`。
+骨架路径不在这里——多套时装之后，它由主进程按清单和文件是否存在算出来。
+右边动画名按素材实际情况填。**填错不会崩**——找不到就自动退回 `idle`。
 
 ## 怎么知道有哪些动画
 
@@ -57,6 +76,11 @@ npm run spine:test
 
 目前验证通过的是 **Spine 3.8.x**（pixi-spine 4.0.6 的 3.8 运行时）。
 如果素材是 4.x 导出的，`.skel` 的二进制格式已经变了，需要换运行时，改配置是解决不了的。
+
+实测的六套阿米娅时装（含近卫）全部是 3.8.99，动画名也基本一致
+（`Default / Interact / Move / Relax / Sit / Sleep`，有的多一个 `Start`）。
+但**骨骼结构并不通用**——近卫那套的头骨叫 `H_Head` 而不是 `F_Head`，
+世界坐标也差得很远，所以代码里对这些都做了兜底而不是写死。
 
 ## audio/
 

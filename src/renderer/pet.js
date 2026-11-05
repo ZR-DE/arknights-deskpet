@@ -37,6 +37,7 @@ let animationNames = [];
 let hitRect = null;
 let currentAnim = null;
 let headBone = null;
+let currentOutfitId = null;
 
 /* ------------------------------------------------------------------ *
  * 动画
@@ -71,89 +72,140 @@ function playOnce(name) {
 /** 窗口顶部留给气泡的高度，角色只在下面这段里排 */
 const BUBBLE_RESERVE = 110;
 
-function layout() {
-  spine.scale.set(1);
-  spine.update(0.016);
+/** 缩放并摆好位置；返回角色在窗口里的矩形。传入实例，因为换装时新骨架还没上台 */
+function layout(target) {
+  target.scale.set(1);
+  target.update(0.016);
 
-  const base = spine.getLocalBounds();
+  const base = target.getLocalBounds();
   if (!base.width || !base.height) return null;
 
   const availH = HEIGHT - BUBBLE_RESERVE;
   const scale = Math.min((WIDTH * 0.96) / base.width, (availH * 0.96) / base.height);
-  spine.scale.set(scale);
+  target.scale.set(scale);
 
   // 水平居中、脚底贴住窗口下沿
-  spine.x = WIDTH / 2 - (base.x + base.width / 2) * scale;
-  spine.y = HEIGHT - 2 - (base.y + base.height) * scale;
+  target.x = WIDTH / 2 - (base.x + base.width / 2) * scale;
+  target.y = HEIGHT - 2 - (base.y + base.height) * scale;
 
   return {
-    x: spine.x + base.x * scale,
-    y: spine.y + base.y * scale,
+    x: target.x + base.x * scale,
+    y: target.y + base.y * scale,
     w: base.width * scale,
     h: base.height * scale,
   };
 }
 
-(async () => {
+/* ------------------------------------------------------------------ *
+ * 装卸时装
+ * ------------------------------------------------------------------ */
+
+/** 这套骨架里第一个能当待机用的动画名 */
+function pickIdle(names) {
+  if (names.includes(CHARACTER.anim.idle)) return CHARACTER.anim.idle;
+  return names.find((n) => /idle|stand|default/i.test(n)) || names[0];
+}
+
+let mounting = false;
+
+/**
+ * 加载并换上某一套时装。
+ *
+ * 顺序很关键：先把新骨架（不挂舞台）加载、布好位，全都成功了才替换旧的。
+ * 反过来先销毁旧的再加载，一旦新素材有问题，屏幕上就什么都不剩——
+ * 换装失败应该是"没换成"，不是"人没了"。
+ */
+async function mountOutfit(url, { silent = false } = {}) {
+  if (mounting) return false;
+  mounting = true;
+
   try {
-    const resource = await PIXI.Assets.load(CHARACTER.skeleton);
+    const resource = await PIXI.Assets.load(url);
     const spineData = resource && resource.spineData ? resource.spineData : resource;
+    if (!spineData || !spineData.animations) throw new Error('资源不是 Spine 数据');
 
-    if (!spineData || !spineData.animations) {
-      throw new Error('资源不是 Spine 数据');
-    }
+    const names = spineData.animations.map((a) => a.name);
+    if (!names.length) throw new Error('骨架里没有动画');
 
-    animationNames = spineData.animations.map((a) => a.name);
-    spine = new PIXI.spine.Spine(spineData);
-    app.stage.addChild(spine);
-
-    headBone = findHeadBone(spine);
+    const next = new PIXI.spine.Spine(spineData);
 
     // 必须先播上动画再量尺寸：初始姿态和待机姿态的包围盒差很多
-    currentAnim = null;
-    play('idle', true);
-    hitRect = layout();
+    next.state.setAnimation(0, pickIdle(names), true);
+    next.update(0.016);
 
-    window.__diag = {
-      stage: 'ready',
-      animations: animationNames,
-      headBone: headBone ? headBone.data.name : null,
-      hitRect: hitRect
-        ? {
-            x: Math.round(hitRect.x),
-            y: Math.round(hitRect.y),
-            w: Math.round(hitRect.w),
-            h: Math.round(hitRect.h),
-          }
-        : null,
-    };
+    const rect = layout(next);
+    if (!rect) throw new Error('包围盒为空');
 
-    // 等 pixi 真正画出一帧再量，否则画布还是空的
-    requestAnimationFrame(() =>
-      requestAnimationFrame(() => {
-        measureTopProfile();
-        const a = bubbleAnchor();
-        window.__diag.headAnchor = { x: Math.round(a.x), y: Math.round(a.y) };
-        window.__diag.topProfile = topProfile ? topProfile.topY.length : 0;
-      })
-    );
+    // ===== 到这里才算加载成功，开始替换 =====
+    const old = spine;
 
-    spine.state.addListener({
+    spine = next;
+    animationNames = names;
+    headBone = findHeadBone(next);
+    currentAnim = CHARACTER.anim.idle;
+    hitRect = rect;
+    topProfile = null; // 换人了，头顶剖面作废，下一步重测
+
+    app.stage.addChild(next);
+
+    if (old) {
+      app.stage.removeChild(old);
+      // texture/baseTexture 传 false：图集由 PIXI.Assets 缓存持有，
+      // 在这里销毁会让"切回来"加载到一张已死的纹理
+      old.destroy({ children: true, texture: false, baseTexture: false });
+    }
+
+    next.state.addListener({
       complete: (entry) => {
         if (!entry || !entry.animation) return;
         if (entry.animation.name !== CHARACTER.anim.idle) toIdle();
       },
     });
 
-    startGreeting();
-    scheduleIdle();
-    startVoice();
+    // 等 pixi 真正画出一帧再量，否则画布还是空的
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        measureTopProfile(next);
+        // 换装时气泡常常是开着的，位置必须立刻跟着新身高走
+        if (bubbleVisible) placeBubble(true);
+        refreshDiag();
+      })
+    );
+
+    if (!silent) {
+      // 视觉反馈：播一次互动动画，不用说话
+      playOnce('interact');
+    }
+    return true;
   } catch (err) {
-    console.error('[spine] 加载失败', err);
-    setTimeout(() => say('……我好像，站不起来了。', 9000), 600);
-    startVoice();
+    console.error('[spine] 加载失败 ' + url, err);
+    return false;
+  } finally {
+    mounting = false;
   }
-})();
+}
+
+function refreshDiag() {
+  window.__diag = {
+    stage: spine ? 'ready' : 'empty',
+    animations: animationNames,
+    headBone: headBone ? headBone.data.name : null,
+    outfit: currentOutfitId,
+    hitRect: hitRect
+      ? {
+          x: Math.round(hitRect.x),
+          y: Math.round(hitRect.y),
+          w: Math.round(hitRect.w),
+          h: Math.round(hitRect.h),
+        }
+      : null,
+    headAnchor: (() => {
+      const a = bubbleAnchor();
+      return { x: Math.round(a.x), y: Math.round(a.y) };
+    })(),
+    topProfile: topProfile ? topProfile.topY.length : 0,
+  };
+}
 
 /**
  * 语音不阻塞启动：角色先站上去，几十兆的解码丢到后台慢慢做。
@@ -246,14 +298,14 @@ const HEAD_MARGIN = 7;
  */
 let topProfile = null;
 
-function measureTopProfile() {
-  if (!spine) return;
+function measureTopProfile(target) {
+  if (!target) return;
 
   // 不能直接从 app.view 读像素：WebGL 绘图缓冲在合成后就被清了，
   // drawImage 拿到的是全透明。extract 会把目标单独渲染进一张纹理，绕开这个问题。
   let shot;
   try {
-    shot = app.renderer.extract.canvas(spine);
+    shot = app.renderer.extract.canvas(target);
   } catch (err) {
     console.log('[scan] extract failed: ' + ((err && err.message) || err));
     return;
@@ -268,7 +320,7 @@ function measureTopProfile() {
   if (!ctx) return;
   const px = ctx.getImageData(0, 0, tw, th).data;
 
-  const bounds = spine.getBounds();
+  const bounds = target.getBounds();
   if (!bounds.width || !bounds.height) return;
 
   // 纹理像素坐标 -> 舞台坐标
@@ -314,13 +366,30 @@ let bubbleVisible = false;
 let smoothX = null;
 let smoothY = null;
 
-/** 她头顶正中的横坐标；没有头骨就退回角色包围盒中点 */
+/**
+ * 她头顶正中的横坐标。
+ *
+ * 优先用头骨——她歪头、侧身的时候气泡会跟着走，这是想要的。
+ * 但不是所有骨架的头骨坐标都可比：近卫那套（sale）的头骨 H_Head
+ * 换算出的世界坐标在 -717，直接拿来定位气泡就飞出窗口了。
+ * 所以加一道合理性校验：头骨必须落在角色包围盒范围内，否则用包围盒中点。
+ */
 function headAnchorX() {
-  if (headBone && spine) {
-    return spine.toGlobal(new PIXI.Point(headBone.worldX, headBone.worldY)).x;
+  const center = hitRect ? hitRect.x + hitRect.w / 2 : WIDTH / 2;
+
+  if (headBone && spine && hitRect) {
+    const x = spine.toGlobal(new PIXI.Point(headBone.worldX, headBone.worldY)).x;
+    const slack = 4;
+    if (x >= hitRect.x - slack && x <= hitRect.x + hitRect.w + slack) return x;
+    return center;
   }
-  if (hitRect) return hitRect.x + hitRect.w / 2;
-  return WIDTH / 2;
+
+  if (headBone && spine) {
+    const x = spine.toGlobal(new PIXI.Point(headBone.worldX, headBone.worldY)).x;
+    if (x >= 0 && x <= WIDTH) return x;
+  }
+
+  return center;
 }
 
 function placeBubble(snap = false) {
@@ -376,7 +445,7 @@ app.ticker.add(() => {
 // 换显示器 / 改缩放时角色位置会变，重新量一次剖面
 window.addEventListener('resize', () => {
   topProfile = null;
-  requestAnimationFrame(() => requestAnimationFrame(measureTopProfile));
+  requestAnimationFrame(() => requestAnimationFrame(() => measureTopProfile(spine)));
 });
 
 /* ------------------------------------------------------------------ *
@@ -425,6 +494,9 @@ window.__petDebug = {
   say,
   speak: () => speakWithVoice(L.click),
   voice: () => window.PET_VOICE.status(),
+  // 走完整链路：主进程落设置 -> 推事件 -> 渲染层换骨架。和点托盘菜单是同一条路
+  outfit: () => currentOutfitId,
+  setOutfit: (id) => window.pet.setOutfit(id),
   state: () => ({
     anchor: bubbleAnchor(),
     head: headBone ? { x: Math.round(headBone.worldX), y: Math.round(headBone.worldY) } : null,
@@ -537,3 +609,50 @@ function scheduleIdle() {
     scheduleIdle();
   }, wait);
 }
+
+/* ------------------------------------------------------------------ *
+ * 启动
+ *
+ * 放在文件最后：这里会用到 bubbleVisible 等 let 声明，
+ * 上面任何一处提前执行都会撞上暂时性死区。
+ * ------------------------------------------------------------------ */
+(async () => {
+  let info = null;
+  try {
+    info = await window.pet.outfits();
+  } catch (err) {
+    console.error('[outfit] 取不到时装清单', err);
+  }
+
+  if (!info || !info.current) {
+    console.error('[outfit] 没有可用的时装素材');
+    setTimeout(() => say('……我好像，没有衣服穿。', 9000), 600);
+    startVoice();
+    return;
+  }
+
+  currentOutfitId = info.current.id;
+  const ok = await mountOutfit(info.current.url, { silent: true });
+
+  if (ok) {
+    startGreeting();
+    scheduleIdle();
+  } else {
+    setTimeout(() => say('……我好像，站不起来了。', 9000), 600);
+  }
+  startVoice();
+
+  // 托盘换装
+  window.pet.onOutfitChanged(async (outfit) => {
+    if (!outfit || !outfit.url) return;
+    const previous = currentOutfitId;
+    currentOutfitId = outfit.id;
+    hideBubble();
+    const swapped = await mountOutfit(outfit.url);
+    if (!swapped) {
+      // 没换成，把状态退回上一套，避免设置和画面对不上
+      currentOutfitId = previous;
+      say('这件……穿不上。', 4000);
+    }
+  });
+})();

@@ -1,15 +1,13 @@
 'use strict';
 
 /**
- * 角色配置——换人只改这一个文件。
+ * 动画配置——换角色/换时装只改这里。
  *
- * 之前角色路径在 pet.js 和 spine-test.js 里各写了一份，换素材时容易只改一处，
- * 调试页和桌面看到的不是同一个角色。现在两份都读这里。
+ * 骨架路径不在这里了：现在有多套时装，路径由主进程按
+ * src/shared/outfits.json + 素材是否齐全算出来，通过 IPC 交给渲染层。
+ * 名字只在一处定义，就少一次换素材改漏的机会。
  */
 window.PET_CHARACTER = {
-  // 骨架文件；同名的 .atlas / .png 会被自动一起加载
-  skeleton: 'pet://character/build_char_002_amiya.skel',
-
   // 骨架里的动画名。填错不会崩，会自动退回 idle。
   anim: {
     idle: 'Default',
@@ -19,9 +17,4 @@ window.PET_CHARACTER = {
     sit: 'Sit',
     sleep: 'Sleep',
   },
-  /**
-   * 语音不走这里：音频文件名统一在主进程的 VOICE 常量里定义
-   * （src/main/main.js），启动时通过 IPC 取。
-   * 少一处重复，就少一次换素材改漏的机会。
-   */
 };

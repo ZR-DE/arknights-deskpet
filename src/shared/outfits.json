@@ -1,0 +1,11 @@
+{
+  "_comment": "时装清单——唯一来源。主进程读它生成托盘菜单，导入脚本读它决定目标文件名。file 是 assets/character/ 下的共同前缀（.skel/.atlas/.png 三个同名文件）。",
+  "outfits": [
+    { "id": "default", "name": "术师 · 常服", "file": "amiya-default" },
+    { "id": "epoque", "name": "术师 · epoque #4", "file": "amiya-epoque" },
+    { "id": "test", "name": "术师 · test #1", "file": "amiya-test" },
+    { "id": "winter", "name": "术师 · winter #1", "file": "amiya-winter" },
+    { "id": "sale", "name": "近卫 · sale #16", "file": "amiya-sale" },
+    { "id": "casc", "name": "近卫 · casc #1", "file": "amiya-casc" }
+  ]
+}

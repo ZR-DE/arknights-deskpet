@@ -15,7 +15,8 @@
 - 点她会说话，带气泡；**有语音包时是真人语音 + 原文对上字幕**
 - 久不操作会主动搭话；深夜会催你去睡
 - 每天第一次见面，她会报出这是第几天、连着几天
-- 托盘常驻：显示/隐藏、总在最前、静音、回到右下角、退出
+- **多套时装**：托盘菜单里直接换，选过哪套记下来，下次开机还是它
+- 托盘常驻：显示/隐藏、总在最前、换装、静音、回到右下角、退出
 
 ## 快速开始
 
@@ -49,6 +50,25 @@ npm start
 
 窗口会是空的（Spine 无法解析就没有任何东西可画），
 把素材放进 `assets/character/` 再启动即可，详见 [assets/README.md](assets/README.md)。
+
+## 换装
+
+时装清单在 `src/shared/outfits.json`，是所有地方唯一的来源——托盘菜单按它生成，
+导入脚本按它决定文件名。想加一套就加一行，然后跑：
+
+```bash
+node scripts/import-outfits.js
+```
+
+它会把 `素材/Amiya/<编号>/` 下的三件套复制到 `assets/character/`，
+**同时改掉 atlas 里的页名**。这一步不能省：原始文件名带 `#`
+（`build_char_002_amiya_epoque#4.png`），而 `#` 在 URL 里是 fragment 分隔符，
+`pet://character/xxx#4.png` 会被截断成 `pet://character/xxx`，图集 404。
+
+运行时换装走的是：托盘点选 → 主进程写 `settings.json` → IPC 推给渲染层 →
+渲染层**先把新骨架加载好、摆好位，成功了才销毁旧的**。
+反过来先销毁再加载，一旦新素材有问题，屏幕上就什么都不剩——
+换装失败应该是"没换成"，不是"人没了"。
 
 ## 语音
 
@@ -98,11 +118,13 @@ npm start
 ## 目录
 
 ```
-src/main/main.js            窗口、穿透、拖拽、托盘、自定义协议、语音文件路径
+src/main/main.js            窗口、穿透、拖拽、托盘、自定义协议、语音与时装清单
 src/main/memory.js          陪伴记录（天数 / 连续天数 / 点击次数）
+src/main/settings.js        偏好设置（当前时装、是否静音）
+src/shared/outfits.json     时装清单（唯一来源，托盘菜单与导入脚本都读它）
 src/preload/preload.js      受控的 IPC 桥
-src/renderer/character.js   角色配置：骨架路径与动画名映射（换人只改这里）
-src/renderer/pet.js         渲染、动画状态、命中检测、气泡定位、台词调度
+src/renderer/character.js   动画名映射（骨架路径由主进程按清单给出）
+src/renderer/pet.js         渲染、动画状态、命中检测、气泡定位、装卸时装
 src/renderer/voice.js       语音解码与分句播放
 src/renderer/lines.js       原创台词（无语音时的兜底）
 src/renderer/audio-label.*  语音标注工具（窗口 / 样式 / 逻辑）
@@ -110,6 +132,7 @@ src/renderer/spine-test.js  素材验证页
 src/renderer/vendor/        pixi 与 pixi-spine 的预构建文件
 assets/                     素材（character 与 audio 永不入库）
 scripts/start.js            命令行启动器
+scripts/import-outfits.js   把解包的时装导入 assets/character/ 并统一改名
 scripts/segment-voice.py    按静音把长语音切成分句（预处理，不参与运行时）
 scripts/make-tray-icon.js   零依赖生成托盘 PNG
 启动桌宠.cmd                双击启动（不依赖 Node）
@@ -140,6 +163,12 @@ scripts/make-tray-icon.js   零依赖生成托盘 PNG
 的话气泡越靠右越窄，文字被迫折行、高度乱跳，看起来就像气泡自己在动；另外窗口高度
 要留出 `BUBBLE_RESERVE`（110px）给气泡，否则人和气泡塞不下，气泡会被顶到脸上。
 
+**但头骨不能无条件相信。** 加了时装之后发现：近卫那套（`sale`）的头骨 `H_Head`
+换算出的世界坐标在 **-717**，直接拿来定位气泡，气泡会整个飞出窗口。同一份代码、
+同一个 `toGlobal`，换一套骨架就失效——说明骨架之间的根变换不可比。
+所以头骨坐标加了一道校验：**必须落在角色包围盒范围内才采信**，否则退回包围盒中点。
+用头骨是为了她歪头时气泡跟着走，校验是为了这件事不至于变成"气泡消失"。
+
 **为什么语音不切成一百个小文件。** Vorbis 每次起播要 20~50ms 解码，连着说话会听到
 「咔」声，而且一百个文件名没法维护。改成整包解码一次进内存（3 分半单声道约 36MB），
 按 `start / duration` 截取播放——采样级精确，跳句没有杂音。
@@ -148,8 +177,9 @@ scripts/make-tray-icon.js   零依赖生成托盘 PNG
 「嘴在说 A、屏幕写 B」的错位。所以有语音时字幕跟语音文本走，`lines.js` 的原创台词
 退居为没有语音时的兜底。这也是为什么 `lines.js` 不需要为换角色重写。
 
-陪伴数据存在 Electron 的 `userData` 目录（托盘菜单「数据文件夹」可直接打开），
-删掉 `companion.json` 就等于让她重新认识你。
+运行时数据存在 Electron 的 `userData` 目录（托盘菜单「数据文件夹」可直接打开），
+两个文件职责分得很开：删掉 `companion.json` 等于让她重新认识你；
+删掉 `settings.json` 只是回到默认时装和默认音量，不影响你们认识多久。
 
 ## 路线图
 
@@ -157,9 +187,10 @@ scripts/make-tray-icon.js   零依赖生成托盘 PNG
 - [x] Spine 骨骼渲染与多动画切换
 - [x] 点击反应、气泡、陪伴天数记录
 - [x] 语音播放、分句标注工具、静音开关
+- [x] 多套时装热切换，选择持久化
 - [ ] 动画状态机打磨：犯困、坐下、久别重逢
 - [ ] 语音按场景分类（问候 / 战斗 / 闲聊用不同的句子）
-- [ ] 多角色切换
+- [ ] 多角色切换（换的是人，不是衣服）
 - [ ] 开机自启、全屏自动隐藏
 
 ## 关于素材与授权

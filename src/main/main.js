@@ -15,9 +15,18 @@ const path = require('node:path');
 const fs = require('node:fs');
 
 const memory = require('./memory');
+const settings = require('./settings');
 
 const ASSETS_ROOT = path.join(__dirname, '..', '..', 'assets');
 const AUDIO_DIR = path.join(ASSETS_ROOT, 'audio');
+const CHARACTER_DIR = path.join(ASSETS_ROOT, 'character');
+
+/**
+ * 时装清单的唯一来源。
+ * 这里只列"应该有哪些"，实际可用与否要按文件是否存在过滤——
+ * 别人 clone 下来没有素材，菜单里就不该冒出点不动的项。
+ */
+const OUTFIT_LIST = require('../shared/outfits.json').outfits;
 
 /**
  * 语音文件名的唯一来源。
@@ -33,6 +42,58 @@ const VOICE = {
 
 function audioPath(name) {
   return path.join(AUDIO_DIR, name);
+}
+
+/* ------------------------------------------------------------------ *
+ * 时装
+ * ------------------------------------------------------------------ */
+
+function outfitUrl(outfit) {
+  return `pet://character/${outfit.file}.skel`;
+}
+
+/** 只留三件套齐全的——缺图集会渲染成一片空白，比菜单里没有更让人困惑 */
+function availableOutfits() {
+  return OUTFIT_LIST.filter((o) =>
+    ['skel', 'atlas', 'png'].every((ext) =>
+      fs.existsSync(path.join(CHARACTER_DIR, `${o.file}.${ext}`))
+    )
+  );
+}
+
+function publicOutfit(outfit) {
+  return { id: outfit.id, name: outfit.name, url: outfitUrl(outfit) };
+}
+
+let currentOutfit = null;
+
+/**
+ * 决定穿哪套：上次选的那套，素材被删了就退回清单里的第一套。
+ * 不按文件时间排序——换台机器拷贝的顺序不同，选择就会莫名其妙地变。
+ */
+function resolveOutfit() {
+  const list = availableOutfits();
+  if (!list.length) {
+    console.warn('[outfit] assets/character/ 下没有完整的三件套，角色不会出现');
+    return null;
+  }
+  const saved = settings.get('outfit');
+  currentOutfit = list.find((o) => o.id === saved) || list[0];
+  if (saved !== currentOutfit.id) settings.set('outfit', currentOutfit.id);
+  return currentOutfit;
+}
+
+function applyOutfit(id) {
+  const target = availableOutfits().find((o) => o.id === id);
+  if (!target || (currentOutfit && target.id === currentOutfit.id)) {
+    // 没真正切换也刷一次，让菜单里的勾选回到正确的那一项
+    refreshTray();
+    return;
+  }
+  currentOutfit = target;
+  settings.set('outfit', target.id);
+  if (win && !win.isDestroyed()) win.webContents.send('pet:outfit', publicOutfit(target));
+  refreshTray();
 }
 
 /** 调试模式：带 --dev 启动时打开 DevTools */
@@ -92,8 +153,19 @@ if (!app.requestSingleInstanceLock()) {
 }
 
 app.on('second-instance', () => {
-  if (!win) return;
+  if (!win || win.isDestroyed()) return;
   win.showInactive();
+
+  /**
+   * 用户又点了一次启动器：多半是刚更新过代码（或者上次没关干净）。
+   *
+   * 不 reload 的话，已经跑着的旧进程会一直用内存里的旧脚本，
+   * 新功能永远不生效，用户看到的就是"双击了但什么都没变"——
+   * 这种情况只能去托盘退出再启动，很容易被当成程序坏了。
+   */
+  if (process.env.PET_SMOKE !== '1' && process.env.PET_OUTFIT_SWEEP !== '1') {
+    win.webContents.reload();
+  }
 });
 
 function cornerPosition() {
@@ -280,6 +352,72 @@ function createWindow() {
       app.exit(0);
     }, 3500);
   }
+
+  /**
+   * 六套时装逐个切换验收。
+   * 走的是完整链路：写设置 -> IPC 推送 -> 渲染层销毁旧骨架换新的，
+   * 和点托盘菜单是同一条路，不是直接改渲染层变量。
+   */
+  if (process.env.PET_OUTFIT_SWEEP === '1') {
+    setTimeout(async () => {
+      const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+      const list = availableOutfits();
+      console.log('[sweep] 共 ' + list.length + ' 套');
+
+      for (const o of list) {
+        try {
+          await win.webContents.executeJavaScript(
+            `window.__petDebug.setOutfit(${JSON.stringify(o.id)})`
+          );
+        } catch (err) {
+          console.error('[sweep] 切换失败 ' + o.id, err);
+        }
+        await wait(1800);
+
+        // 说一句再截：气泡才是最容易因为"换了个更高的头"而压上去的东西
+        try {
+          await win.webContents.executeJavaScript(
+            `window.__petDebug.say('${o.name.replace(/'/g, "\\'")}')`
+          );
+          await wait(500);
+        } catch {
+          /* 说话失败不影响截图 */
+        }
+
+        let diag = null;
+        try {
+          diag = await win.webContents.executeJavaScript(`(() => {
+            const d = window.__diag || {};
+            const b = document.getElementById('bubble');
+            return {
+              stage: d.stage,
+              outfit: d.outfit,
+              head: d.headBone,
+              rect: d.hitRect,
+              anchor: d.headAnchor,
+              profile: d.topProfile,
+              anim: (d.animations || []).length,
+              bubble: b ? b.classList.contains('show') : null,
+            };
+          })()`);
+        } catch (err) {
+          diag = { error: String((err && err.message) || err) };
+        }
+
+        try {
+          const img = await win.webContents.capturePage();
+          fs.writeFileSync(path.join(process.cwd(), `outfit-${o.id}.png`), img.toPNG());
+        } catch (err) {
+          console.error('[sweep] 截图失败 ' + o.id, err);
+        }
+
+        console.log('[sweep] ' + JSON.stringify({ id: o.id, ...diag }));
+      }
+
+      console.log('[sweep] done');
+      app.exit(0);
+    }, 3200);
+  }
 }
 
 /**
@@ -371,69 +509,93 @@ function createTray() {
   tray = new Tray(icon.isEmpty() ? nativeImage.createEmpty() : icon.resize({ width: 16, height: 16 }));
   tray.setToolTip('桌宠');
 
-  const rebuild = () => {
-    const menu = Menu.buildFromTemplate([
-      {
-        label: win && win.isVisible() ? '让她休息（隐藏）' : '叫她出来（显示）',
-        click: () => {
-          if (!win) return;
-          if (win.isVisible()) {
-            win.hide();
-          } else {
-            win.showInactive();
-          }
-          rebuild();
-        },
-      },
-      {
-        label: '总在最前',
-        type: 'checkbox',
-        checked: win ? win.isAlwaysOnTop() : true,
-        click: (item) => {
-          if (win) win.setAlwaysOnTop(item.checked, 'screen-saver');
-        },
-      },
-      {
-        label: '静音（只显示文字）',
-        type: 'checkbox',
-        checked: muted,
-        click: (item) => {
-          muted = item.checked;
-          if (win && !win.isDestroyed()) win.webContents.send('pet:muted', muted);
-        },
-      },
-      { type: 'separator' },
-      {
-        label: '回到右下角',
-        click: () => {
-          if (!win) return;
-          const { x, y } = cornerPosition();
-          win.setPosition(x, y);
-        },
-      },
-      {
-        label: '数据文件夹',
-        click: () => shell.openPath(app.getPath('userData')),
-      },
-      { type: 'separator' },
-      {
-        label: '退出',
-        click: () => {
-          app.isQuitting = true;
-          app.quit();
-        },
-      },
-    ]);
-    tray.setContextMenu(menu);
-  };
-
-  rebuild();
+  refreshTray();
   tray.on('click', () => {
     if (!win) return;
     if (win.isVisible()) win.hide();
     else win.showInactive();
-    rebuild();
+    refreshTray();
   });
+}
+
+/** 换装子菜单：素材缺了就不列出，一套都没有时给一句提示而不是空菜单 */
+function outfitSubmenu() {
+  const list = availableOutfits();
+  if (!list.length) {
+    return [{ label: '（没有可用素材）', enabled: false }];
+  }
+  return list.map((o) => ({
+    label: o.name,
+    type: 'radio',
+    checked: Boolean(currentOutfit && currentOutfit.id === o.id),
+    click: () => applyOutfit(o.id),
+  }));
+}
+
+function buildTrayMenu() {
+  return Menu.buildFromTemplate([
+    {
+      label: win && win.isVisible() ? '让她休息（隐藏）' : '叫她出来（显示）',
+      click: () => {
+        if (!win) return;
+        if (win.isVisible()) {
+          win.hide();
+        } else {
+          win.showInactive();
+        }
+        refreshTray();
+      },
+    },
+    {
+      label: '总在最前',
+      type: 'checkbox',
+      checked: win ? win.isAlwaysOnTop() : true,
+      click: (item) => {
+        if (win) win.setAlwaysOnTop(item.checked, 'screen-saver');
+      },
+    },
+    {
+      label: '换装',
+      submenu: outfitSubmenu(),
+    },
+    {
+      label: '静音（只显示文字）',
+      type: 'checkbox',
+      checked: muted,
+      click: (item) => {
+        muted = item.checked;
+        // 存下来：开会时静音，重启后又开始说话，这种事只会发生一次
+        settings.set('muted', muted);
+        if (win && !win.isDestroyed()) win.webContents.send('pet:muted', muted);
+      },
+    },
+    { type: 'separator' },
+    {
+      label: '回到右下角',
+      click: () => {
+        if (!win) return;
+        const { x, y } = cornerPosition();
+        win.setPosition(x, y);
+      },
+    },
+    {
+      label: '数据文件夹',
+      click: () => shell.openPath(app.getPath('userData')),
+    },
+    { type: 'separator' },
+    {
+      label: '退出',
+      click: () => {
+        app.isQuitting = true;
+        app.quit();
+      },
+    },
+  ]);
+}
+
+function refreshTray() {
+  if (!tray || tray.isDestroyed()) return;
+  tray.setContextMenu(buildTrayMenu());
 }
 
 ipcMain.on('pet:hit', (_event, inside) => {
@@ -462,6 +624,26 @@ ipcMain.on('pet:click', () => {
 });
 
 ipcMain.handle('pet:companion', () => companion);
+
+/* ------------------------------------------------------------------ *
+ * 时装
+ * ------------------------------------------------------------------ */
+
+/**
+ * 渲染层启动时来问"我现在该穿哪套、还有哪些能换"。
+ * 路径由主进程拼，渲染层不自己拼文件名——和语音一样的理由，
+ * 名字只在一处定义，换素材不会改漏。
+ */
+ipcMain.handle('pet:outfits', () => ({
+  current: currentOutfit ? publicOutfit(currentOutfit) : null,
+  list: availableOutfits().map(publicOutfit),
+}));
+
+/** 渲染层也能主动切换（目前只有托盘走，留着给以后的快捷键/双击衣橱） */
+ipcMain.handle('pet:set-outfit', (_event, id) => {
+  applyOutfit(String(id));
+  return currentOutfit ? publicOutfit(currentOutfit) : null;
+});
 
 /* ------------------------------------------------------------------ *
  * 语音
@@ -555,6 +737,8 @@ app.on('ready', () => {
   }
 
   companion = memory.touch();
+  muted = Boolean(settings.get('muted'));
+  resolveOutfit();
   createWindow();
   createTray();
 });
