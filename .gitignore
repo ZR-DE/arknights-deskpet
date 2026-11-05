@@ -65,3 +65,8 @@ desktop.ini
 
 # 姿态验收截图
 /mood-*.png
+
+# 动作 / 表情 / 微动排查截图
+/act-*.png
+/eye-*.png
+/sway-*.png

@@ -41,6 +41,22 @@ let currentOutfitId = null;
 /** 她现在是什么状态：idle / relax / sit / sleep，见下方「休息状态机」 */
 let mood = 'idle';
 
+/**
+ * 微动容器。
+ *
+ * 这批骨架的 Default 是完全静止的——实测三秒内包围盒一个小数位都不变，
+ * 坐着站着就那么定着，看起来像张立绘。所以"她还活着"这件事只能自己做。
+ *
+ * 做法是在外层容器上做整体变换，一根骨骼都不碰：
+ * 动画系统不知道有这回事，换动作、换时装都不会打起来，也不用为每套骨架重调。
+ *
+ * 变换原点钉在脚底：要么不转，要转就绕地面转，否则她会绕着窗口左上角画圈。
+ */
+const sway = new PIXI.Container();
+sway.pivot.set(WIDTH / 2, HEIGHT - 2);
+sway.position.set(WIDTH / 2, HEIGHT - 2);
+app.stage.addChild(sway);
+
 /* ------------------------------------------------------------------ *
  * 动画
  * ------------------------------------------------------------------ */
@@ -77,6 +93,19 @@ const BUBBLE_RESERVE = 110;
 /** 这套衣服按待机姿态算出来的基准缩放；姿态变化时只在这里的基础上微调 */
 let baseScale = 1;
 
+/**
+ * 她在窗口里的实际底边——不含微动的倾斜和浮动。
+ *
+ * 贴底要是拿 getBounds() 来算，微动一歪，包围盒下沿就跟着动，
+ * 贴底会把她整个抬起来几个像素；等微动回正，她就悬在半空了。
+ * 所以用局部包围盒自己换算，把微动摘干净。
+ */
+function petBottom() {
+  if (!spine) return HEIGHT - 2;
+  const lb = spine.getLocalBounds();
+  return spine.y + (lb.y + lb.height) * spine.scale.y;
+}
+
 /** 缩放并摆好位置；返回角色在窗口里的矩形。传入实例，因为换装时新骨架还没上台 */
 function layout(target) {
   target.scale.set(1);
@@ -101,6 +130,104 @@ function layout(target) {
     h: base.height * scale,
   };
 }
+
+/* ------------------------------------------------------------------ *
+ * 待机微动：呼吸 + 偶尔换个重心
+ *
+ * 目标是"像在旁边站着"，不是"在表演动作"。
+ * 幅度小到不抢注意力，节奏比真人慢半拍——快了像喘，大了像站不稳。
+ * ------------------------------------------------------------------ */
+
+/** 呼吸周期（秒） */
+const BREATH_PERIOD = 4.2;
+
+/** 呼吸时头顶起伏的幅度（px） */
+const BREATH_LIFT = 2.6;
+
+/**
+ * 常驻的左右轻摆（度 / 秒）。
+ *
+ * 只有上下浮动的话，看久了还是像一张会呼吸的立绘——因为那是"一维"的。
+ * 叠一层周期不同的横摆，两个正弦合起来就是很缓慢的 8 字形，
+ * 跟呼吸不共振，看起来才像重心在换。
+ *
+ * 0.9° 换算到头顶差不多 8px：站着的人本来就会这样轻微晃，
+ * 再小就看不见，再大就像站不稳了。
+ */
+const IDLE_ROCK_DEG = 0.9;
+const IDLE_ROCK_PERIOD = 8.3;
+
+let swayAngle = 0;
+let swayLift = 0;
+let swayTargetAngle = 0;
+let swayTargetLift = 0;
+let swayNextAt = 0;
+
+/** 姿态切换时把微动归零，免得"坐下"和"歪着"叠在一起 */
+function resetSway() {
+  swayTargetAngle = 0;
+  swayTargetLift = 0;
+}
+
+/** 还有多少帧要盯着「底边别出框」 */
+let settleFrames = 0;
+
+function beginSettle(frames = 46) {
+  settleFrames = frames;
+}
+
+app.ticker.add(() => {
+  const now = performance.now();
+  const dt = Math.min(app.ticker.deltaMS, 80) / 1000;
+
+  // 每隔几秒挑一个"重心"：歪一下、或者只是起伏，然后再自己回正
+  if (now > swayNextAt) {
+    const roll = Math.random();
+    if (roll < 0.5) {
+      // 歪一点。人待着无聊时就是这个样子
+      swayTargetAngle = (Math.random() - 0.5) * 3.6;
+      swayTargetLift = Math.random() * 2.6;
+    } else if (roll < 0.82) {
+      swayTargetAngle = 0;
+      swayTargetLift = Math.random() * 3;
+    } else {
+      swayTargetAngle = 0;
+      swayTargetLift = 0;
+    }
+    swayNextAt = now + 5000 + Math.random() * 6000;
+  }
+
+  // 指数逼近，跟帧率无关：30fps 和 60fps 下走过去的速度一样
+  const k = 1 - Math.pow(0.1, dt);
+  swayAngle += (swayTargetAngle - swayAngle) * k;
+  swayLift += (swayTargetLift - swayLift) * k;
+
+  const t = now / 1000;
+  const breath = Math.sin((t / BREATH_PERIOD) * Math.PI * 2) * 0.5 + 0.5;
+  const rock = Math.sin((t / IDLE_ROCK_PERIOD) * Math.PI * 2) * IDLE_ROCK_DEG;
+
+  // 睡着时呼吸更沉一点，幅度也更大——躺着的人起伏本来就明显
+  const lift = mood === 'sleep' ? BREATH_LIFT * 1.4 : BREATH_LIFT;
+
+  sway.rotation = ((swayAngle + rock) * Math.PI) / 180;
+  // 只往上浮，最低点就是贴地那一刻，不会陷进桌面里
+  sway.y = HEIGHT - 2 - swayLift - breath * lift;
+
+  /**
+   * 姿态刚切过去的那一秒多，每帧检查底边有没有跑出窗口。
+   *
+   * 之前是干等 560ms 再一次性修正，结果坐下的头半秒里腿在框外——
+   * 看到的就是"刚坐下腿没了，过一会儿又出现"。现在每帧把溢出的部分削掉一半，
+   * 她像是被轻轻按回地面，而不是先掉出去再弹回来。
+   */
+  if (settleFrames && spine) {
+    settleFrames--;
+    const over = petBottom() - (HEIGHT - 2);
+    if (over > 0.5) spine.y -= over * 0.8;
+    // 稳定下来再测剖面、更新命中框（这两个贵，不能每帧做）
+    if (!settleFrames) resettle(0);
+  }
+});
 
 /* ------------------------------------------------------------------ *
  * 装卸时装
@@ -164,10 +291,10 @@ async function mountOutfit(url, { silent = false } = {}) {
     hitRect = rect;
     topProfile = null; // 换人了，头顶剖面作废，下一步重测
 
-    app.stage.addChild(next);
+    sway.addChild(next);
 
     if (old) {
-      app.stage.removeChild(old);
+      sway.removeChild(old);
       // texture/baseTexture 传 false：图集由 PIXI.Assets 缓存持有，
       // 在这里销毁会让"切回来"加载到一张已死的纹理
       old.destroy({ children: true, texture: false, baseTexture: false });
@@ -212,7 +339,8 @@ async function mountOutfit(url, { silent = false } = {}) {
     if (mood !== 'idle') {
       currentAnim = null;
       play(mood, true);
-      resettle();
+      beginSettle();
+      resetSway();
     }
     return true;
   } catch (err) {
@@ -551,10 +679,56 @@ window.__petDebug = {
     scheduleMood();
     return { mood, waited: seconds };
   },
+  // 未取整的包围盒：量"她到底动没动"需要小数位
+  rawBounds: () => {
+    if (!spine) return null;
+    const b = spine.getBounds();
+    return { x: b.x, y: b.y, w: b.width, h: b.height };
+  },
+  // 微动当前姿态：实际倾角（含常驻轻摆）和上浮量
+  sway: () => ({
+    deg: Number(((sway.rotation * 180) / Math.PI).toFixed(2)),
+    lift: Number(swayLift.toFixed(2)),
+  }),
+  /**
+   * 脸和表情当前挂的是哪张贴图。
+   *
+   * 眨眼、换表情都不改包围盒，光看包围盒会误判成"她一动不动"。
+   * 这里直接读 slot 的 attachment，能看出动画到底有没有在做表情。
+   */
+  faces: () =>
+    spine
+      ? spine.skeleton.slots
+          .filter((s) => /eye|mouth|emoticon|brow|face/i.test(s.data.name))
+          .map((s) => `${s.data.name}=${s.getAttachment() ? s.getAttachment().name : '-'}`)
+      : [],
+  /** 换表情：直接挂某个 slot 的贴图，用来试哪张是闭眼 */
+  attach: (slot, name) => {
+    if (!spine) return false;
+    try {
+      spine.skeleton.setAttachment(slot, name);
+      return true;
+    } catch (err) {
+      console.error('[attach]', err);
+      return false;
+    }
+  },
   state: () => ({
     mood,
+    anim: currentAnim,
     anchor: bubbleAnchor(),
     head: headBone ? { x: Math.round(headBone.worldX), y: Math.round(headBone.worldY) } : null,
+    // 包围盒随手带上：量「她到底有没有在动」靠这个
+    bounds: (() => {
+      if (!spine) return null;
+      const b = spine.getBounds();
+      return {
+        x: Math.round(b.x),
+        y: Math.round(b.y),
+        w: Math.round(b.width),
+        h: Math.round(b.height),
+      };
+    })(),
     rect: (() => {
       const r = bubbleEl.getBoundingClientRect();
       return [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)];
@@ -564,7 +738,8 @@ window.__petDebug = {
 
 /* ------------------------------------------------------------------ *
  * 互动
- * ------------------------------------------------------------------ */let lastInteract = Date.now();
+ * ------------------------------------------------------------------ */
+let lastInteract = Date.now();
 let pointerActive = false;
 let dragStarted = false;
 let downX = 0;
@@ -602,6 +777,8 @@ window.addEventListener('pointermove', (e) => {
     dragStarted = true;
     clearTimeout(bubbleTimer);
     hideBubble();
+    // 走路的时候别让她一边走一边晃，看着会晕
+    resetSway();
     play('move', true);
   }
   if (dragStarted) window.pet.dragMove(e.screenX, e.screenY);
@@ -721,7 +898,9 @@ function enterMood(next) {
   mood = next;
   currentAnim = null;
   play(next, true);
-  resettle();
+  // 立刻开始逐帧托住底边；收尾那次测量由 settle 结束时统一做，不用再排一次
+  beginSettle();
+  resetSway();
   scheduleMood();
   refreshDiag();
 }
@@ -733,7 +912,8 @@ function wake() {
   if (wasResting && spine) {
     currentAnim = null;
     play('idle', true);
-    resettle();
+    beginSettle();
+    resetSway();
     refreshDiag();
   }
   scheduleMood();
@@ -776,8 +956,7 @@ function resettle(delay = 560) {
        *
        * 注意是双向修正：只往上推的话，站起来时她还悬在半空回不去。
        */
-      const box = spine.getBounds();
-      const overflow = box.y + box.height - (HEIGHT - 2);
+      const overflow = petBottom() - (HEIGHT - 2);
       if (Math.abs(overflow) > 0.5) spine.y -= overflow;
 
       topProfile = null;

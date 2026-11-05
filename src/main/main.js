@@ -435,7 +435,8 @@ function createWindow() {
         } catch (err) {
           console.error('[mood] 切换失败 ' + m, err);
         }
-        await wait(1200);
+        // 等姿态混合 + 逐帧托底跑完（settle 约 1.5s），否则读到的是上一个姿态的命中框
+        await wait(2600);
 
         // 先说一句：坐着也要能正常说话，气泡要跟着新的头顶高度重新贴上去。
         // 先 say 后读 diag，读到的才是气泡的真实位置，不是隐藏状态的旧值
@@ -491,7 +492,8 @@ function createWindow() {
 
       const step = async (label, seconds) => {
         await run(`window.__petDebug.ago(${seconds})`);
-        await wait(2600); // 等姿态混合 + 贴底修正跑完
+        // ago 之后状态机还要排 1.5s 才切，切完 settle 要跑 1.5s 才更新命中框，留足
+        await wait(3800);
         const s = await run(
           `({ mood: window.__diag.mood, rect: window.__diag.hitRect, bubble: document.getElementById('bubble').classList.contains('show') })`
         );
@@ -511,6 +513,131 @@ function createWindow() {
       );
       console.log('[flow] ' + JSON.stringify({ label: '点击之后', ...after }));
 
+      app.exit(0);
+    }, 3200);
+  }
+
+  /**
+   * 待机动作幅度 + 坐下瞬间出框曲线。
+   *
+   * 「太呆滞」是主观判断，先量一下 Default 到底动了多少；
+   * 「刚坐下腿会没」也要知道消失持续多久，才知道要修到什么程度。
+   */
+  if (process.env.PET_IDLE_PROBE === '1') {
+    setTimeout(async () => {
+      const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+      const run = (js) => win.webContents.executeJavaScript(js);
+
+      // 1) 待机 4 秒内的包围盒抖动 + 微动角度
+      const idle = [];
+      for (let i = 0; i < 32; i++) {
+        idle.push(
+          await run(`(() => {
+            const s = window.__petDebug.state();
+            const w = window.__petDebug.sway();
+            return s.bounds ? [s.bounds.y, s.bounds.h, s.bounds.x, s.bounds.w, w.deg, w.lift] : null;
+          })()`)
+        );
+        await wait(120);
+      }
+      const cols = [0, 1, 2, 3, 4].map((c) => idle.filter(Boolean).map((r) => r[c]));
+      const span = cols.map((v) => (v.length ? Number((Math.max(...v) - Math.min(...v)).toFixed(2)) : null));
+      console.log(
+        '[idle] 幅度 y/h/x/w/倾角(度) = ' + JSON.stringify(span) + ' 帧数 ' + idle.filter(Boolean).length
+      );
+
+      // 顺手留两张不同相位的图，肉眼比对"她到底晃没晃"
+      try {
+        const a = await win.webContents.capturePage();
+        fs.writeFileSync(path.join(process.cwd(), 'sway-a.png'), a.toPNG());
+        await wait(2100);
+        const b = await win.webContents.capturePage();
+        fs.writeFileSync(path.join(process.cwd(), 'sway-b.png'), b.toPNG());
+      } catch (err) {
+        console.error('[idle] 截图失败', err);
+      }
+
+      // 2) 坐下后底边出框随时间的曲线
+      await run(`window.__petDebug.mood('sit')`);
+      const t0 = Date.now();
+      const trace = [];
+      for (let i = 0; i < 26; i++) {
+        const bottom = await run(`(() => {
+          const b = window.__petDebug.state().bounds;
+          return b ? b.y + b.h : null;
+        })()`);
+        trace.push([Date.now() - t0, bottom === null ? null : Math.round(bottom)]);
+        await wait(80);
+      }
+      console.log('[sit] 底边轨迹 ' + JSON.stringify(trace));
+
+      app.exit(0);
+    }, 3200);
+  }
+
+  /**
+   * Interact 到底是个什么动作？
+   *
+   * 想拿它当「她自己动一下」用，得先看清楚：要是"被戳到缩一下"那种反应，
+   * 无端播出来就很怪。每 260ms 截一帧，连起来看。
+   */
+  if (process.env.PET_ACT_PROBE === '1') {
+    setTimeout(async () => {
+      const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+      // 先用小数位量一次待机：确认 Default 是不是真的不动
+      const raw = [];
+      const faces = new Set();
+      for (let i = 0; i < 20; i++) {
+        raw.push(await win.webContents.executeJavaScript(`window.__petDebug.rawBounds()`));
+        const f = await win.webContents.executeJavaScript(`window.__petDebug.faces()`);
+        if (Array.isArray(f)) faces.add(f.join('|'));
+        await wait(110);
+      }
+      const ys = raw.filter(Boolean).map((b) => b.y);
+      const hs = raw.filter(Boolean).map((b) => b.h);
+      console.log(
+        '[idle] y ' +
+          Math.min(...ys).toFixed(2) +
+          '~' +
+          Math.max(...ys).toFixed(2) +
+          '  h ' +
+          Math.min(...hs).toFixed(2) +
+          '~' +
+          Math.max(...hs).toFixed(2) +
+          '  表情组合 ' +
+          faces.size
+      );
+      if (faces.size > 1) console.log('[idle] 表情变化: ' + JSON.stringify([...faces].slice(0, 4)));
+      else console.log('[idle] 表情: ' + JSON.stringify([...faces][0] || ''));
+
+      await win.webContents.executeJavaScript(`window.__petDebug.playOnce('interact')`);
+      for (let i = 0; i < 7; i++) {
+        await wait(260);
+        try {
+          const img = await win.webContents.capturePage();
+          fs.writeFileSync(path.join(process.cwd(), `act-${i}.png`), img.toPNG());
+        } catch (err) {
+          console.error('[act] 截图失败', err);
+        }
+      }
+      console.log('[act] done');
+
+      // 图集里有 F_Eye / F_Eye_2 / F_Eye_3 / F_Eye_4，原本想找一张闭眼做眨眼。
+      // 逐张挂上去看过：四张都是睁眼变体（不同瞳色/高光），没有闭合帧，
+      // 所以眨眼做不了，只能靠微动。--faces 可以复核这件事
+      await wait(1200);
+      for (const name of ['F_Eye_2', 'F_Eye_3', 'F_Eye_4', 'F_Eye']) {
+        await win.webContents.executeJavaScript(`window.__petDebug.attach('F_Eye', '${name}')`);
+        await wait(300);
+        try {
+          const img = await win.webContents.capturePage();
+          fs.writeFileSync(path.join(process.cwd(), `eye-${name}.png`), img.toPNG());
+        } catch (err) {
+          console.error('[eye] 截图失败', err);
+        }
+      }
+      console.log('[eye] done');
       app.exit(0);
     }, 3200);
   }
