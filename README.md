@@ -19,22 +19,36 @@
 
 ## 快速开始
 
+### 方式一：双击（不用装 Node）
+
+装好依赖之后，`node_modules/electron/dist/electron.exe` 本身就是完整的运行环境，
+**不需要系统里安装 Node.js**。
+
+双击项目里的 `启动桌宠.vbs` 即可。它会自动找到程序目录，不弹命令行窗口。
+
+### 方式二：命令行
+
 ```bash
 npm install
 npm start
 ```
 
-没有素材时窗口会是空的（Spine 无法解析就没有任何东西可画），
+`npm start` 走的是 `scripts/start.js`，它会清掉环境里可能存在的
+`ELECTRON_RUN_AS_NODE`——这个变量会让 Electron 退化成纯 Node 运行，
+主进程直接崩溃。
+
+### 没有素材时
+
+窗口会是空的（Spine 无法解析就没有任何东西可画），
 把素材放进 `assets/character/` 再启动即可，详见 [assets/README.md](assets/README.md)。
 
-## 换角色 / 调试素材
+## 调试
 
-```bash
-npm run spine:test
-```
-
-单独开一个验证窗口，把骨架里的动画名、蒙皮、包围盒打印出来并播放第一个动画。
-换新素材时先用它看清楚有哪些动画，再去改 `src/renderer/pet.js` 顶部的 `CHARACTER` 配置。
+| 命令 | 用途 |
+|---|---|
+| `npm run dev` | 启动并弹出独立的 DevTools 窗口 |
+| `npm run spine:test` | 单独开验证窗口，打印动画名、蒙皮、包围盒 |
+| 双击 `调试启动.cmd` | 不用 Node 的调试入口，日志直接显示在命令窗口里 |
 
 ## 托盘
 
@@ -50,8 +64,10 @@ src/renderer/pet.js        渲染、动画状态、命中检测、台词调度
 src/renderer/spine-test.js 素材验证页
 src/renderer/vendor/       pixi 与 pixi-spine 的预构建文件
 assets/                    素材（character 与 audio 永不入库）
-scripts/start.js           启动器
+scripts/start.js           命令行启动器
 scripts/make-tray-icon.js  零依赖生成托盘 PNG
+启动桌宠.vbs               双击启动（不依赖 Node）
+调试启动.cmd               双击调试（带日志窗口）
 ```
 
 ## 两个实现上的必要选择

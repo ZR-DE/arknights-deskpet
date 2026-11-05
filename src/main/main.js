@@ -18,6 +18,9 @@ const memory = require('./memory');
 
 const ASSETS_ROOT = path.join(__dirname, '..', '..', 'assets');
 
+/** 调试模式：带 --dev 启动时打开 DevTools */
+const DEV_MODE = process.argv.includes('--dev');
+
 const MIME = {
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
@@ -126,6 +129,12 @@ function createWindow() {
   win.once('ready-to-show', () => {
     win.showInactive();
   });
+
+  // --dev：开一个独立的 DevTools 窗口方便看报错。
+  // 用 detach 而不是内嵌，否则 DevTools 会占掉这个 380x520 的透明窗口。
+  if (DEV_MODE) {
+    win.webContents.openDevTools({ mode: 'detach' });
+  }
 
   win.on('closed', () => {
     win = null;
