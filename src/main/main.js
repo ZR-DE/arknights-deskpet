@@ -9,11 +9,46 @@ const {
   screen,
   nativeImage,
   shell,
+  protocol,
 } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 
 const memory = require('./memory');
+
+const ASSETS_ROOT = path.join(__dirname, '..', '..', 'assets');
+
+const MIME = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.atlas': 'text/plain; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.skel': 'application/octet-stream',
+  '.ogg': 'audio/ogg',
+  '.mp3': 'audio/mpeg',
+};
+
+/**
+ * 自定义协议。
+ *
+ * 为什么不能直接 file://：pixi 用 XHR 读 .skel 和 .atlas，
+ * file:// 页面的 origin 是 null，请求会被 CORS 拦下来。
+ * 走一个带 corsEnabled 的私有协议，既绕开限制又不放宽 webSecurity。
+ */
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: 'pet',
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      corsEnabled: true,
+      stream: true,
+    },
+  },
+]);
 
 const WIN_WIDTH = 380;
 const WIN_HEIGHT = 520;
@@ -85,7 +120,8 @@ function createWindow() {
   win.setIgnoreMouseEvents(true, { forward: true });
   ignoringMouse = true;
 
-  win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
+  const entry = process.env.PET_SPINE_TEST === '1' ? 'spine-test.html' : 'index.html';
+  win.loadFile(path.join(__dirname, '..', 'renderer', entry));
 
   win.once('ready-to-show', () => {
     win.showInactive();
@@ -112,6 +148,7 @@ function createWindow() {
     setTimeout(async () => {
       try {
         const diag = await win.webContents.executeJavaScript(`(() => {
+          if (window.__diag) return window.__diag;
           const b = document.getElementById('layer-body');
           const e = document.getElementById('layer-eyes');
           const r = document.getElementById('pet').getBoundingClientRect();
@@ -257,7 +294,28 @@ ipcMain.on('pet:click', () => {
 
 ipcMain.handle('pet:companion', () => companion);
 
+function registerAssetProtocol() {
+  protocol.handle('pet', async (request) => {
+    try {
+      const url = new URL(request.url);
+      const rel = decodeURIComponent(url.host + url.pathname);
+      const target = path.normalize(path.join(ASSETS_ROOT, rel));
+
+      if (!target.startsWith(ASSETS_ROOT)) {
+        return new Response('forbidden', { status: 403 });
+      }
+
+      const data = await fs.promises.readFile(target);
+      const mime = MIME[path.extname(target).toLowerCase()] || 'application/octet-stream';
+      return new Response(new Uint8Array(data), { headers: { 'content-type': mime } });
+    } catch {
+      return new Response('not found', { status: 404 });
+    }
+  });
+}
+
 app.on('ready', () => {
+  registerAssetProtocol();
   companion = memory.touch();
   createWindow();
   createTray();

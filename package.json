@@ -7,6 +7,7 @@
   "scripts": {
     "start": "node scripts/start.js",
     "dev": "node scripts/start.js --dev",
+    "spine:test": "node scripts/start.js --spine-test",
     "icon": "node scripts/make-tray-icon.js"
   },
   "keywords": [
@@ -20,5 +21,9 @@
   },
   "devDependencies": {
     "electron": "^45.2.3"
+  },
+  "dependencies": {
+    "pixi-spine": "^4.0.6",
+    "pixi.js": "^7.4.3"
   }
 }

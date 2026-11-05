@@ -43,3 +43,7 @@ desktop.ini
 # 调试截图
 /pet-smoke.png
 /pet-desktop.png
+/diag.json
+
+# 工作区元数据
+.workbuddy/

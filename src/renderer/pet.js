@@ -1,51 +1,169 @@
 'use strict';
 
-const petEl = document.getElementById('pet');
-const bodyLayer = document.getElementById('layer-body');
-const eyesLayer = document.getElementById('layer-eyes');
+/**
+ * 主渲染层：pixi + pixi-spine。
+ *
+ * 想换角色只改下面这块配置——加载逻辑跟具体是谁无关。
+ * 动画名按素材实际内容填，缺失的会退回 idle，不会崩。
+ */
+
+const CHARACTER = {
+  skeleton: 'pet://character/build_char_4228_closur.skel',
+  anim: {
+    idle: 'Default',
+    interact: 'Interact',
+    move: 'Move',
+    relax: 'Relax',
+    sit: 'Sit',
+    sleep: 'Sleep',
+  },
+};
+
+const WIDTH = window.innerWidth;
+const HEIGHT = window.innerHeight;
+
 const bubbleEl = document.getElementById('bubble');
 const bubbleText = document.getElementById('bubble-text');
-
-const PLACEHOLDER = '../../assets/placeholder-character.svg';
 const L = window.PET_LINES;
 
 /* ------------------------------------------------------------------ *
- * 素材：找不到真素材就退回占位图，保证任何时候都能启动
- *
- * 注意：本地 file:// 加载失败往往在脚本执行之前就完成了，
- * 只挂 error 监听会漏掉，所以加载完后还要主动查一次 naturalWidth。
+ * pixi
  * ------------------------------------------------------------------ */
-function usePlaceholder() {
-  if (bodyLayer.dataset.fallback === '1') return;
-  bodyLayer.dataset.fallback = '1';
-  bodyLayer.src = PLACEHOLDER;
-}
-
-bodyLayer.addEventListener('error', usePlaceholder);
-
-window.addEventListener('load', () => {
-  if (!bodyLayer.complete || bodyLayer.naturalWidth === 0) usePlaceholder();
-  if (!eyesLayer.complete || eyesLayer.naturalWidth === 0) eyesLayer.classList.add('missing');
+const app = new PIXI.Application({
+  width: WIDTH,
+  height: HEIGHT,
+  backgroundAlpha: 0,
+  antialias: true,
+  resolution: window.devicePixelRatio || 1,
+  autoDensity: true,
+  preserveDrawingBuffer: true,
 });
 
+app.ticker.maxFPS = 30;
+app.view.id = 'pet-canvas';
+document.body.appendChild(app.view);
+
+let spine = null;
+let animationNames = [];
+let hitRect = null;
+let currentAnim = null;
+
 /* ------------------------------------------------------------------ *
- * 命中检测：只让角色轮廓内的区域吃掉鼠标，其余交还桌面
+ * 动画
+ * ------------------------------------------------------------------ */
+function play(name, loop = true) {
+  if (!spine) return;
+  const wanted = CHARACTER.anim[name] || name;
+  const actual = animationNames.includes(wanted) ? wanted : CHARACTER.anim.idle;
+
+  if (currentAnim === actual && loop) return;
+  currentAnim = actual;
+  spine.state.setAnimation(0, actual, loop);
+}
+
+function toIdle() {
+  currentAnim = null;
+  play('idle', true);
+}
+
+function playOnce(name) {
+  if (!spine) return;
+  const wanted = CHARACTER.anim[name] || name;
+  if (!animationNames.includes(wanted)) return;
+  currentAnim = wanted;
+  spine.state.setAnimation(0, wanted, false);
+  spine.state.addAnimation(0, CHARACTER.anim.idle, true, 0);
+}
+
+/* ------------------------------------------------------------------ *
+ * 加载与定位
+ * ------------------------------------------------------------------ */
+function layout() {
+  spine.scale.set(1);
+  spine.update(0.016);
+
+  const base = spine.getLocalBounds();
+  if (!base.width || !base.height) return null;
+
+  const scale = Math.min((WIDTH * 0.96) / base.width, (HEIGHT * 0.96) / base.height);
+  spine.scale.set(scale);
+
+  // 水平居中、脚底贴住窗口下沿
+  spine.x = WIDTH / 2 - (base.x + base.width / 2) * scale;
+  spine.y = HEIGHT - 2 - (base.y + base.height) * scale;
+
+  return {
+    x: spine.x + base.x * scale,
+    y: spine.y + base.y * scale,
+    w: base.width * scale,
+    h: base.height * scale,
+  };
+}
+
+(async () => {
+  try {
+    const resource = await PIXI.Assets.load(CHARACTER.skeleton);
+    const spineData = resource && resource.spineData ? resource.spineData : resource;
+
+    if (!spineData || !spineData.animations) {
+      throw new Error('资源不是 Spine 数据');
+    }
+
+    animationNames = spineData.animations.map((a) => a.name);
+    spine = new PIXI.spine.Spine(spineData);
+    app.stage.addChild(spine);
+
+    // 必须先播上动画再量尺寸：初始姿态和待机姿态的包围盒差很多
+    currentAnim = null;
+    play('idle', true);
+    hitRect = layout();
+
+    window.__diag = {
+      stage: 'ready',
+      animations: animationNames,
+      hitRect: hitRect
+        ? {
+            x: Math.round(hitRect.x),
+            y: Math.round(hitRect.y),
+            w: Math.round(hitRect.w),
+            h: Math.round(hitRect.h),
+          }
+        : null,
+    };
+
+    spine.state.addListener({
+      complete: (entry) => {
+        if (!entry || !entry.animation) return;
+        if (entry.animation.name !== CHARACTER.anim.idle) toIdle();
+      },
+    });
+
+    startGreeting();
+    scheduleIdle();
+  } catch (err) {
+    console.error('[spine] 加载失败', err);
+    setTimeout(() => say('……我好像，站不起来了。', 9000), 600);
+  }
+})();
+
+/* ------------------------------------------------------------------ *
+ * 命中检测：只在角色矩形内吃掉鼠标
  * ------------------------------------------------------------------ */
 let cursorInside = null;
 
 function pointInPet(x, y) {
-  const r = petEl.getBoundingClientRect();
-  if (x < r.left || x > r.right || y < r.top || y > r.bottom) return false;
+  if (!hitRect) return false;
+  const { x: rx, y: ry, w, h } = hitRect;
+  if (x < rx || x > rx + w || y < ry || y > ry + h) return false;
 
-  const nx = (x - r.left) / r.width;
-  const ny = (y - r.top) / r.height;
+  const nx = (x - rx) / w;
+  const ny = (y - ry) / h;
 
-  // 顶部收窄（头/肩），底部略微收窄，中间最宽。
-  // 这是个粗糙的轮廓近似，比纯矩形少抓很多空白区。
+  // 顶部（头和肩）比底部窄，四角让给桌面
   const offCenter = Math.abs(nx - 0.5) * 2;
-  const topTaper = ny < 0.16 ? ((0.16 - ny) / 0.16) * 0.55 : 0;
-  const bottomTaper = ny > 0.94 ? ((ny - 0.94) / 0.06) * 0.15 : 0;
-  return offCenter <= 1 - Math.max(topTaper, bottomTaper) - 0.02;
+  const topTaper = ny < 0.2 ? ((0.2 - ny) / 0.2) * 0.5 : 0;
+  const bottomTaper = ny > 0.95 ? ((ny - 0.95) / 0.05) * 0.12 : 0;
+  return offCenter <= 0.99 - Math.max(topTaper, bottomTaper);
 }
 
 function updateHit(x, y) {
@@ -55,17 +173,15 @@ function updateHit(x, y) {
   window.pet.hit(inside);
 }
 
+function releaseMouse() {
+  if (cursorInside === false) return;
+  cursorInside = false;
+  window.pet.hit(false);
+}
+
 document.addEventListener('mousemove', (e) => updateHit(e.clientX, e.clientY));
-document.addEventListener('mouseleave', () => {
-  if (cursorInside === false) return;
-  cursorInside = false;
-  window.pet.hit(false);
-});
-window.addEventListener('blur', () => {
-  if (cursorInside === false) return;
-  cursorInside = false;
-  window.pet.hit(false);
-});
+document.addEventListener('mouseleave', releaseMouse);
+window.addEventListener('blur', releaseMouse);
 
 /* ------------------------------------------------------------------ *
  * 气泡
@@ -81,7 +197,7 @@ function say(text, duration = 6000) {
 }
 
 /* ------------------------------------------------------------------ *
- * 互动：拖拽 vs 点击
+ * 互动
  * ------------------------------------------------------------------ */
 let lastInteract = Date.now();
 let pointerActive = false;
@@ -93,24 +209,17 @@ function onTap() {
   lastInteract = Date.now();
   window.pet.click();
 
-  petEl.classList.remove('tap');
-  void petEl.offsetWidth;
-  petEl.classList.add('tap');
-
+  playOnce('interact');
   say(window.PET_PICK(L.click), 3800);
 }
 
-petEl.addEventListener('pointerdown', (e) => {
-  if (e.button !== 0) return;
+document.addEventListener('pointerdown', (e) => {
+  if (e.button !== 0 || !pointInPet(e.clientX, e.clientY)) return;
+
   pointerActive = true;
   dragStarted = false;
   downX = e.screenX;
   downY = e.screenY;
-  try {
-    petEl.setPointerCapture(e.pointerId);
-  } catch {
-    /* 忽略 */
-  }
   window.pet.dragBegin(e.screenX, e.screenY);
   e.preventDefault();
 });
@@ -122,39 +231,33 @@ window.addEventListener('pointermove', (e) => {
 
   if (!dragStarted && Math.hypot(dx, dy) > 5) {
     dragStarted = true;
-    petEl.classList.add('dragging');
     bubbleEl.classList.remove('show');
     clearTimeout(bubbleTimer);
+    play('move', true);
   }
   if (dragStarted) window.pet.dragMove(e.screenX, e.screenY);
 });
 
-window.addEventListener('pointerup', (e) => {
+window.addEventListener('pointerup', () => {
   if (!pointerActive) return;
   pointerActive = false;
-  try {
-    petEl.releasePointerCapture(e.pointerId);
-  } catch {
-    /* 忽略 */
-  }
 
   if (dragStarted) {
     dragStarted = false;
-    petEl.classList.remove('dragging');
     window.pet.dragEnd();
     lastInteract = Date.now();
+    toIdle();
   } else {
     onTap();
   }
 });
 
 /* ------------------------------------------------------------------ *
- * 开场问候：今天第一次见面，她要知道这是第几天
+ * 开场问候
  * ------------------------------------------------------------------ */
 function greetLater(state) {
   if (!state || !state.isFirstToday) {
-    const hour = new Date().getHours();
-    if (hour >= 23 || hour < 5) say(window.PET_PICK(L.lateNight), 6000);
+    if (isLateNight()) say(window.PET_PICK(L.lateNight), 6000);
     return;
   }
 
@@ -167,31 +270,32 @@ function greetLater(state) {
   }
 }
 
-setTimeout(async () => {
+async function startGreeting() {
   let state = null;
   try {
     state = await window.pet.companion();
   } catch {
     /* 主进程没给，就不说话 */
   }
-  greetLater(state);
-}, 900);
+  setTimeout(() => greetLater(state), 900);
+}
 
 /* ------------------------------------------------------------------ *
- * 闲置：她试探你还在不在
+ * 闲置
  * ------------------------------------------------------------------ */
+function isLateNight() {
+  const hour = new Date().getHours();
+  return hour >= 23 || hour < 5;
+}
+
 function scheduleIdle() {
   const wait = 45000 + Math.random() * 70000;
   setTimeout(() => {
     const quiet = Date.now() - lastInteract;
-    const visible = !document.hidden;
-    if (visible && quiet > 40000 && !bubbleEl.classList.contains('show')) {
-      const hour = new Date().getHours();
-      const late = hour >= 23 || hour < 5;
-      say(window.PET_PICK(late ? L.lateNight : L.idle), 6000);
+    if (!document.hidden && quiet > 40000 && !bubbleEl.classList.contains('show')) {
+      say(window.PET_PICK(isLateNight() ? L.lateNight : L.idle), 6000);
+      if (isLateNight()) play('sleep', true);
     }
     scheduleIdle();
   }, wait);
 }
-
-scheduleIdle();

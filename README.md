@@ -3,12 +3,13 @@
 一个安静的桌面伴侣。透明悬浮、贴边常驻、不抢焦点，会记住今天是陪你的第几天。
 
 > **本项目只包含代码，不包含、也不分发任何游戏素材。**
-> 立绘与语音需要你自己准备，详见 [assets/README.md](assets/README.md)。
+> 骨骼与语音需要你自己准备，详见 [assets/README.md](assets/README.md)。
 
 ## 现在能做什么
 
 - 无边框透明窗口，角色站在桌面上，不占任务栏
-- 呼吸起伏 + 轻微摇摆 + 眨眼（需要 `eyes.png`）
+- 用 Spine 骨骼实时渲染，不是静态图也不是视频
+- 待机 / 互动 / 拖拽 / 犯困 多组动画自动切换，播完回落到待机
 - 鼠标只在角色轮廓内生效，其余区域直接穿透到桌面
 - 拖拽移动，松手即定位
 - 点她会说话，带气泡
@@ -23,15 +24,17 @@ npm install
 npm start
 ```
 
-第一次运行时 `assets/character/` 是空的，会自动退回内置的占位小人——
-先确认窗口、穿透、拖拽都正常，再放真素材。
+没有素材时窗口会是空的（Spine 无法解析就没有任何东西可画），
+把素材放进 `assets/character/` 再启动即可，详见 [assets/README.md](assets/README.md)。
 
-放好素材后重启即可：
+## 换角色 / 调试素材
 
+```bash
+npm run spine:test
 ```
-assets/character/body.png   # 全身立绘，透明背景，脚踩下边缘
-assets/character/eyes.png   # 可选，只留眼睛，用来眨眼
-```
+
+单独开一个验证窗口，把骨架里的动画名、蒙皮、包围盒打印出来并播放第一个动画。
+换新素材时先用它看清楚有哪些动画，再去改 `src/renderer/pet.js` 顶部的 `CHARACTER` 配置。
 
 ## 托盘
 
@@ -40,26 +43,38 @@ assets/character/eyes.png   # 可选，只留眼睛，用来眨眼
 ## 目录
 
 ```
-src/main/main.js        窗口、穿透、拖拽、托盘、IPC
-src/main/memory.js      陪伴记录（天数 / 连续天数 / 点击次数）
-src/preload/preload.js  受控的 IPC 桥
-src/renderer/           页面、样式、动画、台词
-assets/                 素材（character 与 audio 永不入库）
+src/main/main.js           窗口、穿透、拖拽、托盘、自定义协议
+src/main/memory.js         陪伴记录（天数 / 连续天数 / 点击次数）
+src/preload/preload.js     受控的 IPC 桥
+src/renderer/pet.js        渲染、动画状态、命中检测、台词调度
+src/renderer/spine-test.js 素材验证页
+src/renderer/vendor/       pixi 与 pixi-spine 的预构建文件
+assets/                    素材（character 与 audio 永不入库）
+scripts/start.js           启动器
 scripts/make-tray-icon.js  零依赖生成托盘 PNG
 ```
 
-陪伴数据存在 Electron 的 `userData` 目录下（托盘菜单「数据文件夹」可直接打开），
+## 两个实现上的必要选择
+
+**为什么不用 `file://` 加载素材。** pixi 通过 XHR 读 `.skel` 和 `.atlas`，
+而 `file://` 页面的 origin 是 `null`，请求会被 CORS 拦掉。所以主进程注册了一个
+`pet://` 私有协议映射到 `assets/`，带 `corsEnabled`，同时保持 `webSecurity` 开启。
+
+**为什么 CSP 里有 `unsafe-eval`。** pixi 7 的批渲染器用 `new Function` 生成着色器，
+不放宽这一项就直接报错。这个应用不加载任何远程内容，风险面是封闭的。
+
+陪伴数据存在 Electron 的 `userData` 目录（托盘菜单「数据文件夹」可直接打开），
 删掉 `companion.json` 就等于让她重新认识你。
 
 ## 路线图
 
 - [x] 透明窗口 / 穿透 / 拖拽 / 托盘
-- [x] 呼吸、摇摆、点击反应、气泡
-- [x] 陪伴天数记录
+- [x] Spine 骨骼渲染与多动画切换
+- [x] 点击反应、气泡、陪伴天数记录
 - [ ] 语音播放（依赖 `assets/audio/`）
-- [ ] Spine 骨骼动画，取代静态立绘
+- [ ] 动画状态机打磨：犯困、坐下、久别重逢
 - [ ] 多角色切换
-- [ ] 开机自启
+- [ ] 开机自启、全屏自动隐藏
 
 ## 关于素材与授权
 

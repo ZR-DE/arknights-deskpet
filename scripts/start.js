@@ -18,7 +18,13 @@ const electronBinary = require('electron');
 const env = { ...process.env };
 delete env.ELECTRON_RUN_AS_NODE;
 
-const child = spawn(electronBinary, [path.join(__dirname, '..'), ...process.argv.slice(2)], {
+const passthrough = process.argv.slice(2);
+
+if (passthrough.includes('--spine-test')) {
+  env.PET_SPINE_TEST = '1';
+}
+
+const child = spawn(electronBinary, [path.join(__dirname, '..'), ...passthrough], {
   stdio: 'inherit',
   env,
 });
