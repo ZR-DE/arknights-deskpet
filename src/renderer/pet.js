@@ -47,6 +47,7 @@ let spine = null;
 let animationNames = [];
 let hitRect = null;
 let currentAnim = null;
+let headBone = null;
 
 /* ------------------------------------------------------------------ *
  * 动画
@@ -113,6 +114,8 @@ function layout() {
     spine = new PIXI.spine.Spine(spineData);
     app.stage.addChild(spine);
 
+    headBone = findHeadBone(spine);
+
     // 必须先播上动画再量尺寸：初始姿态和待机姿态的包围盒差很多
     currentAnim = null;
     play('idle', true);
@@ -121,6 +124,8 @@ function layout() {
     window.__diag = {
       stage: 'ready',
       animations: animationNames,
+      headBone: headBone ? headBone.data.name : null,
+      headTopOffset,
       hitRect: hitRect
         ? {
             x: Math.round(hitRect.x),
@@ -130,6 +135,16 @@ function layout() {
           }
         : null,
     };
+
+    // 等 pixi 真正画出一帧再量头顶，否则画布还是空的
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        measureHeadTop();
+        window.__diag.headTopOffset = headTopOffset;
+        const a = bubbleAnchor();
+        window.__diag.headAnchor = { x: Math.round(a.x), y: Math.round(a.y) };
+      })
+    );
 
     spine.state.addListener({
       complete: (entry) => {
@@ -184,22 +199,184 @@ document.addEventListener('mouseleave', releaseMouse);
 window.addEventListener('blur', releaseMouse);
 
 /* ------------------------------------------------------------------ *
- * 气泡
+ * 气泡：挂在她头上，而不是挂在窗口上
+ * ------------------------------------------------------------------ */
+
+/** 头骨查找：优先精确名，退而求其次找任意含 head 的骨骼 */
+function findHeadBone(instance) {
+  const sk = instance.skeleton;
+  const exact = ['F_Head_I', 'Head', 'head', 'Bip01 Head'];
+  for (const name of exact) {
+    const bone = sk.findBone ? sk.findBone(name) : null;
+    if (bone) return bone;
+  }
+  const bones = sk.bones || [];
+  return bones.find((b) => /head/i.test(b.data.name)) || null;
+}
+
+/** 气泡底边离她头顶的留白 */
+const HEAD_MARGIN = 7;
+
+/**
+ * 头骨锚点 -> 可见头顶的距离。
+ *
+ * 为什么不能直接用一个比例：这份骨架的头骨 F_Head_I 落在眼睛高度，
+ * 离可见头顶差了 120px（角色越高差得越多），换角色就完全不准。
+ * 所以启动后直接扫一遍渲染结果里最上面那个不透明像素，
+ * 用「头顶 - 头骨」的实测差值当固定偏移。之后头怎么浮动，气泡都跟着。
+ */
+let headTopOffset = null;
+
+function measureHeadTop() {
+  if (!headBone || !spine) return;
+
+  // 不能直接从 app.view 读像素：WebGL 绘图缓冲在合成后就被清了，
+  // drawImage 拿到的是全透明。extract 会把目标单独渲染进一张纹理，绕开这个问题。
+  let shot;
+  try {
+    shot = app.renderer.extract.canvas(spine);
+  } catch (err) {
+    console.log('[scan] extract failed: ' + ((err && err.message) || err));
+    return;
+  }
+  if (!shot || typeof shot.getContext !== 'function') return;
+
+  const tw = shot.width;
+  const th = shot.height;
+  if (!tw || !th) return;
+
+  const ctx = shot.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return;
+  const px = ctx.getImageData(0, 0, tw, th).data;
+
+  const bounds = spine.getBounds();
+  if (!bounds.width || !bounds.height) return;
+
+  // 纹理像素坐标 -> 舞台坐标
+  const kx = bounds.width / tw;
+  const ky = bounds.height / th;
+
+  const head = spine.toGlobal(new PIXI.Point(headBone.worldX, headBone.worldY));
+  const cx = (head.x - bounds.x) / kx;
+
+  // 只在头骨左右一条竖带里找，避开左边漂浮的笔记本
+  const band = 38 / kx;
+  const x0 = Math.max(0, Math.round(cx - band));
+  const x1 = Math.min(tw, Math.round(cx + band));
+
+  let firstRow = -1;
+  for (let y = 0; y < th && firstRow < 0; y++) {
+    for (let x = x0; x < x1; x++) {
+      if (px[(y * tw + x) * 4 + 3] > 40) {
+        firstRow = y;
+        break;
+      }
+    }
+  }
+
+  if (firstRow >= 0) {
+    const topY = bounds.y + firstRow * ky;
+    headTopOffset = topY - head.y - HEAD_MARGIN;
+  }
+}
+
+function bubbleAnchor() {
+  if (headBone && spine) {
+    const p = spine.toGlobal(new PIXI.Point(headBone.worldX, headBone.worldY));
+    // 还没量到头顶就先用一个保守估算，量到后自动替换
+    const lift = headTopOffset === null ? 34 : headTopOffset;
+    return { x: p.x, y: p.y + lift };
+  }
+  // 没有头骨就退回角色包围盒顶部中点，总比锚在窗口上强
+  if (hitRect) return { x: hitRect.x + hitRect.w / 2, y: hitRect.y };
+  return { x: WIDTH / 2, y: 70 };
+}
+
+let bubbleVisible = false;
+let smoothX = null;
+let smoothY = null;
+
+function placeBubble(snap = false) {
+  const a = bubbleAnchor();
+  if (snap || smoothX === null) {
+    smoothX = a.x;
+    smoothY = a.y;
+  } else {
+    // 平滑跟随：点头、换动作时头部位置会突变，直接贴过去会让气泡跳
+    smoothX += (a.x - smoothX) * 0.3;
+    smoothY += (a.y - smoothY) * 0.3;
+  }
+
+  const w = bubbleEl.offsetWidth;
+  const h = bubbleEl.offsetHeight;
+  const half = w / 2;
+
+  // 水平方向别让气泡跑出窗口
+  const x = Math.min(Math.max(smoothX, half + 6), WIDTH - half - 6);
+  // 顶部空间不够就往下压，宁可压到她也不要出框
+  const y = Math.max(smoothY, h + 4);
+
+  bubbleEl.style.left = `${Math.round(x)}px`;
+  bubbleEl.style.top = `${Math.round(y)}px`;
+
+  // 气泡被窗口挤开多少，尾巴就补回多少，始终指着她
+  const tail = Math.min(Math.max(smoothX - x + half, 12), Math.max(w - 12, 12));
+  bubbleEl.style.setProperty('--tail-x', `${Math.round(tail)}px`);
+}
+
+// 30fps 下每 3 帧算一次（10Hz）：头部浮动很慢，每帧写样式纯属浪费
+let bubbleTick = 0;
+app.ticker.add(() => {
+  if (!bubbleVisible) return;
+  if (++bubbleTick % 3) return;
+  placeBubble();
+});
+
+// 换显示器 / 改缩放时头顶位置会变，重新量一次
+window.addEventListener('resize', () => {
+  headTopOffset = null;
+  requestAnimationFrame(() => requestAnimationFrame(measureHeadTop));
+});
+
+/* ------------------------------------------------------------------ *
+ * 气泡文本
  * ------------------------------------------------------------------ */
 let bubbleTimer = null;
+
+function hideBubble() {
+  bubbleVisible = false;
+  bubbleEl.classList.remove('show');
+}
 
 function say(text, duration = 6000) {
   if (!text) return;
   bubbleText.textContent = text;
+  bubbleVisible = true;
+  // 先按新文本量一次宽度再定位（snap），避免气泡先出现在旧位置再滑过来
+  placeBubble(true);
   bubbleEl.classList.add('show');
   clearTimeout(bubbleTimer);
-  bubbleTimer = setTimeout(() => bubbleEl.classList.remove('show'), duration);
+  bubbleTimer = setTimeout(hideBubble, duration);
 }
+
+// 调试钩子：自动化验证用，也可以从 DevTools 手动触发动画
+window.__petDebug = {
+  play,
+  playOnce,
+  say,
+  state: () => ({
+    anchor: bubbleAnchor(),
+    head: headBone ? { x: Math.round(headBone.worldX), y: Math.round(headBone.worldY) } : null,
+    rect: (() => {
+      const r = bubbleEl.getBoundingClientRect();
+      return [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)];
+    })(),
+  }),
+};
 
 /* ------------------------------------------------------------------ *
  * 互动
- * ------------------------------------------------------------------ */
-let lastInteract = Date.now();
+ * ------------------------------------------------------------------ */let lastInteract = Date.now();
 let pointerActive = false;
 let dragStarted = false;
 let downX = 0;
@@ -231,8 +408,8 @@ window.addEventListener('pointermove', (e) => {
 
   if (!dragStarted && Math.hypot(dx, dy) > 5) {
     dragStarted = true;
-    bubbleEl.classList.remove('show');
     clearTimeout(bubbleTimer);
+    hideBubble();
     play('move', true);
   }
   if (dragStarted) window.pet.dragMove(e.screenX, e.screenY);
@@ -292,7 +469,7 @@ function scheduleIdle() {
   const wait = 45000 + Math.random() * 70000;
   setTimeout(() => {
     const quiet = Date.now() - lastInteract;
-    if (!document.hidden && quiet > 40000 && !bubbleEl.classList.contains('show')) {
+    if (!document.hidden && quiet > 40000 && !bubbleVisible) {
       say(window.PET_PICK(isLateNight() ? L.lateNight : L.idle), 6000);
       if (isLateNight()) play('sleep', true);
     }

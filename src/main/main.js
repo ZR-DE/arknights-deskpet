@@ -155,19 +155,37 @@ function createWindow() {
 
   if (process.env.PET_SMOKE === '1') {
     setTimeout(async () => {
+      if (process.env.PET_PROBE === '1') {
+        try {
+          const probe = await win.webContents.executeJavaScript(`(async () => {
+            const d = window.__petDebug;
+            if (!d) return { error: 'no debug hook' };
+            const idle = d.state();
+            d.playOnce('interact');
+            const samples = [];
+            for (let i = 0; i < 8; i++) {
+              await new Promise((r) => setTimeout(r, 120));
+              const s = d.state();
+              samples.push([s.head ? s.head.y : null, Math.round(s.anchor.y), s.rect[1]]);
+            }
+            return { idleHead: idle.head && idle.head.y, idleAnchor: Math.round(idle.anchor.y), samples };
+          })()`);
+          console.log('[probe]', JSON.stringify(probe));
+        } catch (err) {
+          console.error('[probe] failed', err);
+        }
+      }
+
       try {
         const diag = await win.webContents.executeJavaScript(`(() => {
-          if (window.__diag) return window.__diag;
-          const b = document.getElementById('layer-body');
-          const e = document.getElementById('layer-eyes');
-          const r = document.getElementById('pet').getBoundingClientRect();
-          return {
-            body: b.src.split('/').slice(-2).join('/'),
-            bodySize: b.naturalWidth + 'x' + b.naturalHeight,
-            eyesHidden: e.classList.contains('missing'),
-            petRect: [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)],
-            bubble: document.getElementById('bubble').className,
+          const el = document.getElementById('bubble');
+          const r = el.getBoundingClientRect();
+          const extra = {
+            bubbleShown: el.classList.contains('show'),
+            bubbleText: document.getElementById('bubble-text').textContent.slice(0, 24),
+            bubbleRect: [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)],
           };
+          return Object.assign({}, window.__diag || {}, extra);
         })()`);
         console.log('[diag]', JSON.stringify(diag));
       } catch (err) {

@@ -79,6 +79,7 @@ window.__diag.stage = 'app-created';
       .map((b) => ({ n: b.data.name, x: Math.round(b.worldX), y: Math.round(b.worldY) }))
       .slice(0, 60);
     window.__diag.bonesTotal = allBones.length;
+    window.__diag.boneNames = allBones.map((b) => b.data.name);
 
     window.__diag.slots = (spine.skeleton.slots || [])
       .map((s) => `${s.data.name}${s.getAttachment() ? '' : '(空)'}`)

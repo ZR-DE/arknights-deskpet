@@ -19,12 +19,18 @@ body {
   z-index: 1;
 }
 
+/* 气泡不锚在窗口上，而是由 JS 每帧算到头顶——
+   位置来自骨架里的头骨（F_Head_I），所以她动、换动作、被拖走，
+   气泡都跟着走。left/top 是 JS 写入的屏幕坐标，初始值只是兜底。 */
 .bubble {
   position: absolute;
   left: 50%;
-  top: 10px;
+  top: 60px;
   z-index: 2;
-  transform: translate(-50%, 6px);
+  transform: translate(-50%, -100%) translateY(7px);
+  /* max-content 很关键：绝对定位元素的可用宽度是「窗口宽 - left」，
+     不写死就会越靠右越窄，文字被迫折行，气泡高度乱跳 */
+  width: max-content;
   max-width: 250px;
   padding: 9px 13px;
   border-radius: 12px;
@@ -36,19 +42,20 @@ body {
   white-space: pre-wrap;
   word-break: break-word;
   opacity: 0;
-  transition: opacity 260ms ease, transform 260ms ease;
+  transition: opacity 240ms ease, transform 240ms ease;
   pointer-events: none;
 }
 
 .bubble.show {
   opacity: 1;
-  transform: translate(-50%, 0);
+  transform: translate(-50%, -100%);
 }
 
+/* 小三角的横向位置由 --tail-x 控制，气泡被窗口边缘挤开时它仍指向头 */
 .bubble::after {
   content: "";
   position: absolute;
-  left: 50%;
+  left: var(--tail-x, 50%);
   bottom: -5px;
   width: 10px;
   height: 10px;
