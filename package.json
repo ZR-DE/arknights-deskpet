@@ -5,8 +5,8 @@
   "description": "A quiet desktop companion. Code only — no game assets are included or distributed.",
   "main": "src/main/main.js",
   "scripts": {
-    "start": "electron .",
-    "dev": "electron . --dev",
+    "start": "node scripts/start.js",
+    "dev": "node scripts/start.js --dev",
     "icon": "node scripts/make-tray-icon.js"
   },
   "keywords": [
