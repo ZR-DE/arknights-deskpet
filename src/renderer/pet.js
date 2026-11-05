@@ -624,11 +624,20 @@ function scheduleIdle() {
     console.error('[outfit] 取不到时装清单', err);
   }
 
+  /**
+   * 兜底：主进程还停在旧版本的时候会走到这里。
+   *
+   * 触发场景很具体——又点了一次启动器，旧进程收到通知后 reload 了渲染层，
+   * 但主进程代码不会跟着更新（Electron 不热重载主进程）。
+   * 这时 pet:outfits 没有对应的 handler，invoke 会 reject。
+   * 不兜底的话，用户看到的是"点了一下启动器，人没了"。
+   */
   if (!info || !info.current) {
-    console.error('[outfit] 没有可用的时装素材');
-    setTimeout(() => say('……我好像，没有衣服穿。', 9000), 600);
-    startVoice();
-    return;
+    info = {
+      current: { id: 'default', url: 'pet://character/amiya-default.skel' },
+      list: [],
+    };
+    console.warn('[outfit] 取不到清单，回退到默认时装');
   }
 
   currentOutfitId = info.current.id;
@@ -643,16 +652,18 @@ function scheduleIdle() {
   startVoice();
 
   // 托盘换装
-  window.pet.onOutfitChanged(async (outfit) => {
-    if (!outfit || !outfit.url) return;
-    const previous = currentOutfitId;
-    currentOutfitId = outfit.id;
-    hideBubble();
-    const swapped = await mountOutfit(outfit.url);
-    if (!swapped) {
-      // 没换成，把状态退回上一套，避免设置和画面对不上
-      currentOutfitId = previous;
-      say('这件……穿不上。', 4000);
-    }
-  });
+  if (typeof window.pet.onOutfitChanged === 'function') {
+    window.pet.onOutfitChanged(async (outfit) => {
+      if (!outfit || !outfit.url) return;
+      const previous = currentOutfitId;
+      currentOutfitId = outfit.id;
+      hideBubble();
+      const swapped = await mountOutfit(outfit.url);
+      if (!swapped) {
+        // 没换成，把状态退回上一套，避免设置和画面对不上
+        currentOutfitId = previous;
+        say('这件……穿不上。', 4000);
+      }
+    });
+  }
 })();
