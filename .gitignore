@@ -40,6 +40,15 @@ desktop.ini
 # 自产资源放行（托盘图标、占位图等）
 !/assets/brand/**
 
+# 本机解包素材原始文件夹
+# 注意：*.skel / *.atlas 已被上面的全局规则挡住，但里面的 .png 图集
+# 不在 /assets/** 范围内，会漏出去，所以整个文件夹一起忽略
+/素材/
+
+# 从 GitHub 下载的仓库压缩包与解压副本（重复内容，不入库）
+/arknights-deskpet-main/
+/*.zip
+
 # 调试截图
 /pet-smoke.png
 /pet-desktop.png
